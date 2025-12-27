@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>サボる時計 v0.2.1</title>
+  <title>サボる時計 v0.2.0</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%0A%3Crect%20x%3D%272%27%20y%3D%272%27%20width%3D%2728%27%20height%3D%2728%27%20rx%3D%276%27%20fill%3D%27black%27%20stroke%3D%27white%27%20stroke-width%3D%272%27%2F%3E%0A%3Cpath%20d%3D%27M6%2016%20h20%20M16%206%20v20%27%20stroke%3D%27white%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%2F%3E%0A%3C%2Fsvg%3E">
 
   <!-- Google Fonts: Noto Sans 100 -->
@@ -45,55 +45,7 @@
       display:none;
     }
     #settings-panel .row { margin:6px 0; }
-  
-    /* 左上のテストボタン */
-    #btnTest {
-      position:fixed; left:10px; top:10px; z-index:99999;
-      width:40px; height:40px;
-      border-radius:50%;
-      border:none;
-      background:transparent;
-      color:#eee;
-      cursor:pointer;
-      font-size:18px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      opacity:0.8;
-    }
-    #btnTest:hover { opacity:1; }
-
-    #test-panel {
-      position: fixed;
-      left: 10px;
-      top: 60px;
-      z-index: 99998;
-      width: min(520px, calc(100vw - 20px));
-      background: rgba(0,0,0,0.75);
-      border: 1px solid rgba(255,255,255,0.22);
-      border-radius: 12px;
-      padding: 10px 12px;
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-      display: none;
-      backdrop-filter: blur(8px);
-    }
-    #test-panel .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; }
-    #test-panel .row.head { justify-content: space-between; margin-top:0; }
-    #test-panel button {
-      border: 1px solid rgba(255,255,255,0.25);
-      background: rgba(255,255,255,0.08);
-      color:#eee;
-      padding: 8px 10px;
-      border-radius: 10px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-    #test-panel button:hover { background: rgba(255,255,255,0.14); }
-    #test-panel .small { opacity:0.85; font-size: 11px; line-height: 1.35; }
-    #testState { font-size: 12px; opacity:0.95; }
-    #testReadout { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-
-</style>
+  </style>
 </head>
 <body>
   <button id="btnSettings" aria-label="設定" title="設定">⚙︎</button>
@@ -108,49 +60,71 @@
     <div class="row">
       <label><input type="checkbox" id="togglePreview"> カメラプレビューを表示</label>
     </div>
-  
-  <button id="btnTest" aria-label="テスト" title="テスト">🧪</button>
-  <div id="test-panel">
-    <div class="row head">
-      <div><strong>テスト</strong> <span id="testState">—</span></div>
-      <div class="small">Tで開閉</div>
-    </div>
+<hr style="border:none;border-top:1px solid rgba(0,0,0,0.25);margin:10px 0;">
+<div class="row" style="font-weight:700;">デバッグ（動作確認）</div>
 
-    <div class="row">
-      <button id="tEnterV">ENTER 上下バウンド</button>
-      <button id="tEnterH">ENTER 左右バウンド</button>
-      <button id="tEnterR">ENTER ランダムバウンド</button>
-    </div>
-
-    <div class="row">
-      <button id="tExitRed">EXIT 赤→コロン早→爆発</button>
-      <button id="tExitFade">EXIT 透明→消える</button>
-      <button id="tExitZoom">EXIT 距離感ズーム追従</button>
-    </div>
-
-    <div class="row">
-      <button id="tIdle">IDLE（サボり）</button>
-      <button id="tDisplay">DISPLAY（即・時刻）</button>
-      <button id="tRebuild">Targets再生成</button>
-    </div>
-
-    <div class="row">
-      <button id="tSeenOn">見られている ON</button>
-      <button id="tSeenOff">見られている OFF</button>
-      <label class="small" style="display:flex;align-items:center;gap:6px;">
-        <input type="checkbox" id="tAutoExit" checked>
-        自動EXIT（3秒見続け）
-      </label>
-    </div>
-
-    <div class="row small" id="testReadout">—</div>
-    <div class="row small">
-      ショートカット: 1/2/3=ENTER, 4/5/6=EXIT, I=IDLE, D=DISPLAY, R=Rebuild, S=Seen切替, T=パネル
-    </div>
-  </div>
-
-
+<div class="row">
+  <label><input type="checkbox" id="useSim" checked> シミュレーションを使う（カメラ無視）</label>
 </div>
+
+<div class="row">
+  <label><input type="checkbox" id="simHasFace" checked> hasFace（見られている）</label>
+</div>
+
+<div class="row">
+  <div style="display:grid;grid-template-columns:1fr;gap:6px;">
+    <label>顔X（0=左 / 100=右）
+      <input type="range" id="simFaceX" min="0" max="100" value="50">
+    </label>
+    <label>顔Y（0=上 / 100=下）
+      <input type="range" id="simFaceY" min="0" max="100" value="50">
+    </label>
+    <label>距離（0=遠い / 100=近い）
+      <input type="range" id="simFaceDist" min="0" max="100" value="50">
+    </label>
+  </div>
+</div>
+
+<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;">
+  <button id="dbgGoIdle">IDLE</button>
+  <button id="dbgGoShow">SHOW</button>
+</div>
+
+<div class="row" style="display:flex;gap:6px;flex-wrap:wrap;">
+  <button id="dbgContinue">復帰（&lt;4s）</button>
+  <button id="dbgNewSession">新セッション（ENTER）</button>
+</div>
+
+<div class="row">
+  <div style="display:flex;gap:6px;align-items:center;">
+    <select id="dbgEnterSel" style="flex:1;">
+      <option value="RANDOM">ENTER: ランダム</option>
+      <option value="ENTER_VERTICAL_BOUNCE">ENTER: 上下バウンド</option>
+      <option value="ENTER_HORIZONTAL_BOUNCE">ENTER: 左右バウンド</option>
+      <option value="ENTER_RANDOM_BOUNCE">ENTER: 多方向バウンド</option>
+      <option value="ENTER_EDGE_SQUASH">ENTER: 端からにゅる</option>
+      <option value="ENTER_SQUASH_WITH_LAG">ENTER: スク&スト+遅延</option>
+    </select>
+    <button id="dbgEnterGo">発動</button>
+  </div>
+</div>
+
+<div class="row">
+  <div style="display:flex;gap:6px;align-items:center;">
+    <select id="dbgExitSel" style="flex:1;">
+      <option value="RANDOM">EXIT: ランダム</option>
+      <option value="EXIT_RED_EXPLOSION">EXIT: 赤→爆発</option>
+      <option value="EXIT_FADE_OUT">EXIT: 透明→消える</option>
+      <option value="EXIT_ZOOM_OUT_TRACKING">EXIT: 遠のく追従</option>
+    </select>
+    <button id="dbgExitGo">発動</button>
+  </div>
+</div>
+
+<div class="row" id="dbgReadout" style="background:rgba(255,255,255,0.6);padding:6px 8px;border-radius:8px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
+  STATE: -
+</div>
+  </div>
 
   <div id="camWrap" style="position:fixed;right:10px;bottom:10px;width:240px;z-index:50000;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.3);border-radius:10px;padding:6px;display:none;">
     <video id="cam" autoplay playsinline muted style="width:100%;height:auto;transform:scaleX(-1);display:block;"></video>
@@ -166,6 +140,6 @@
 
   <!-- p5 CDN -->
   <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
-  <script src="./src/main.js?v=0.2.1" defer></script>
+  <script src="./src/main.js?v=0.2.0" defer></script>
 </body>
 </html>
