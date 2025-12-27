@@ -2,7 +2,7 @@
 (function(){
   'use strict';
   function boot(){
-    const VERSION = 'v0.1.18';
+    const VERSION = 'v0.1.17';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -13,16 +13,7 @@
     const N = 1650;
     const HN = 770, MN = 770, SN = 0;
     const CN = 110;          // H/M/S allocation
-    const IDLE_JITTER = 0.35,
-          IDLE_DAMP = 0.992,
-          IDLE_FLOW = 0.14,
-          IDLE_MAX_SPEED = 2.6,
-          IDLE_FLOW_SCALE = 0.0022,
-          IDLE_FLOW_TIME = 0.09,
-          IDLE_SCATTER_KICK = 2.2,
-          IDLE_SCATTER_JITTER = 1.4,
-          IDLE_SCATTER_SEC = 0.9,
-          SEEK_STRENGTH = 0.085, DAMP = 0.78;
+    const IDLE_JITTER = 0.35, SEEK_STRENGTH = 0.085, DAMP = 0.78;
     const DETECT_EVERY_N_FRAMES = 6, SEEN_DEBOUNCE_MS = 1200;
 
     // ---- Linger-head gag ----
@@ -123,7 +114,7 @@
     const BLUR_BASE = 2.5;
     const THRESH_BASE = 0.70;
 
-    // --- Appearance tuning (v0.1.18) ---
+    // --- Appearance tuning (v0.1.17) ---
     // Make GitHub Pages and local rendering closer.
     const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
     const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT; // keep same to avoid thickness jump    // thickness multiplier when unseen
@@ -200,7 +191,6 @@
       const SEEN_VIS_LERP_OUT = 0.07; // how slow visuals fade when becoming unseen
       let frames=0, lastFPS=0, lastFPSTime=performance.now();
       let unseenStart = null;  // 見られていない状態が始まった時刻
-      let idleScatterUntil = 0; // ms: boost idle dispersion right after switching to unseen
       // Cartoon Clock: 「見つづけた」時の状態
       let watchSeenStart = null;   // 連続で見られ始めた時刻
       let watchHeat01 = 0;         // 0〜1 白→赤
@@ -275,10 +265,6 @@
       // DIGIT_SCALE: 画面が極端に縦長などの場合に、数字とコロンが重ならないようにするための追加スケール
       let DIGIT_SCALE = 1;
 
-      // avoid re-randomizing particles on every resize (DevTools open/close triggers resize)
-      let didLayoutInit = false;
-      let lastCanvasW = 0, lastCanvasH = 0;
-
       // --- Responsive slime params ---
       // DISC_RADIUS / BLUR / THRESH を「数字スケール」と「gBlob解像度」に合わせて自動調整
       // 目的:
@@ -321,10 +307,6 @@
         const vw = window.innerWidth || DESIGN_W;
         const vh = window.innerHeight || DESIGN_H;
 
-        // remember previous canvas size before resizing
-        const oldW = (p.width && p.width>0) ? p.width : vw;
-        const oldH = (p.height && p.height>0) ? p.height : vh;
-
         // キャンバスサイズ = 端末の画面サイズ（ウィンドウサイズ）
         p.resizeCanvas(vw, vh);
 
@@ -339,20 +321,7 @@
         const bh = Math.max(64, Math.floor(vh / blobScale));
         gBlob = p.createGraphics(bw, bh);
         gBlob.pixelDensity(DPR);
-        if (!didLayoutInit){
-          layoutInitial();
-          didLayoutInit = true;
-        } else {
-          const sx = vw / Math.max(1, oldW);
-          const sy = vh / Math.max(1, oldH);
-          for (let i=0;i<N;i++){
-            const a = pts[i];
-            a.x *= sx; a.y *= sy;
-            a.vx *= sx; a.vy *= sy;
-          }
-        }
-        lastCanvasW = vw; lastCanvasH = vh;
-        rebuildTargets();
+        layoutInitial(); rebuildTargets();
         updateSlimeParams();
       }
 
@@ -375,7 +344,7 @@ function applyFitScale(){
         applyFitScale();
         const waitFonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
         waitFonts.then(()=>{ rebuildTargets(); setTimeout(rebuildTargets, 0); });
-        updateDiag('診断: OK / slime-guided v0.1.18');
+        updateDiag('診断: OK / slime-guided v0.1.17');
       };
 
       function layoutInitial(){
@@ -385,22 +354,6 @@ function applyFitScale(){
           pts[i].x = Math.random()*p.width; pts[i].y = Math.random()*p.height;
           pts[i].vx = pts[i].vy = 0; pts[i].group = g;
           pts[i].activeAt = 0; pts[i].ax = pts[i].x; pts[i].ay = pts[i].y; pts[i].catchUntil = 0;
-        }
-      }
-
-      function scatterOnUnseen(){
-        const cx = p.width * 0.5;
-        const cy = p.height * 0.5;
-        for (let i=0;i<N;i++){
-          const a = pts[i];
-          const dx = a.x - cx;
-          const dy = a.y - cy;
-          const len = Math.hypot(dx, dy) || 1;
-          const ux = dx / len;
-          const uy = dy / len;
-          const kick = IDLE_SCATTER_KICK + Math.random() * IDLE_SCATTER_JITTER;
-          a.vx += ux * kick + (Math.random()-0.5) * kick * 0.8;
-          a.vy += uy * kick + (Math.random()-0.5) * kick * 0.8;
         }
       }
 
@@ -777,8 +730,6 @@ function triggerExplosion(){
           // 見られなくなった瞬間：ラグ状態をクリアしてカウント開始
           for (let i=0;i<N;i++){ pts[i].activeAt = 0; pts[i].catchUntil=0; }
           if (unseenStart === null) unseenStart = performance.now();
-          scatterOnUnseen();
-          idleScatterUntil = now + IDLE_SCATTER_SEC * 1000;
         }
         prevSeen = seen;
 
@@ -855,8 +806,6 @@ function triggerExplosion(){
           if (timerEl){
             if (!seen){
               if (unseenStart === null) unseenStart = performance.now();
-          scatterOnUnseen();
-          idleScatterUntil = now + IDLE_SCATTER_SEC * 1000;
               const elapsedSec = (performance.now() - unseenStart) * 0.001;
               timerEl.textContent = '見られていない時間: ' + elapsedSec.toFixed(1) + 's';
             } else {
@@ -965,21 +914,8 @@ function triggerExplosion(){
               a.vy = (a.vy + dy*SEEK_STRENGTH*gain) * DAMP;
             }
           } else {
-            // unseen: keep drifting with a gentle flow field + noise (avoid staying clumped at center)
-            const tSec = now * 0.001;
-            const n = p.noise(a.x * IDLE_FLOW_SCALE, a.y * IDLE_FLOW_SCALE, tSec * IDLE_FLOW_TIME);
-            const ang = n * Math.PI * 4; // 0..4π
-            const fx = Math.cos(ang) * IDLE_FLOW;
-            const fy = Math.sin(ang) * IDLE_FLOW;
-            let j = IDLE_JITTER;
-            if (now < idleScatterUntil) j *= 2.2;
-            a.vx = (a.vx + fx + (Math.random()-0.5) * j) * IDLE_DAMP;
-            a.vy = (a.vy + fy + (Math.random()-0.5) * j) * IDLE_DAMP;
-            const sp = Math.hypot(a.vx, a.vy);
-            if (sp > IDLE_MAX_SPEED){
-              const s = IDLE_MAX_SPEED / sp;
-              a.vx *= s; a.vy *= s;
-            }
+            a.vx=(a.vx+(Math.random()-0.5)*IDLE_JITTER)*0.98;
+            a.vy=(a.vy+(Math.random()-0.5)*IDLE_JITTER)*0.98;
           }
           a.x+=a.vx; a.y+=a.vy;
           if (a.x<0){a.x=0;a.vx*=-0.5;} if (a.x>p.width){a.x=p.width;a.vx*=-0.5;}
