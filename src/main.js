@@ -111,7 +111,7 @@
     const BLUR_BASE = 2.5;
     const THRESH_BASE = 0.70;
 
-    // --- Appearance tuning (v0.1.15) ---
+    // --- Appearance tuning (v0.1.16) ---
     // Make GitHub Pages and local rendering closer.
     const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
     const UNSEEN_VIS_THICK_MULT = 1.35;    // thickness multiplier when unseen
@@ -182,6 +182,10 @@
       // --------------- State ---------------
       let pts = new Array(N).fill(0).map(()=>({x:0,y:0,vx:0,vy:0,tx:0,ty:0, group:0, activeAt:0, ax:0, ay:0, catchUntil:0, sx:0, sy:0, catchStart:0, catchTier:0}));
       let seen = true, prevSeen = true, lastTimeStr = "";
+      // Visual smoothing: avoid "pakki" thickness jump when switching seen/unseen
+      let seenVis01 = 1.0; // 1=seen look, 0=unseen look (smoothed)
+      const SEEN_VIS_LERP_IN = 0.25;  // how fast visuals snap when becoming seen
+      const SEEN_VIS_LERP_OUT = 0.07; // how slow visuals fade when becoming unseen
       let frames=0, lastFPS=0, lastFPSTime=performance.now();
       let unseenStart = null;  // 見られていない状態が始まった時刻
       // Cartoon Clock: 「見つづけた」時の状態
@@ -272,7 +276,7 @@
         // 画面上の半径 ≈ DISC_RADIUS(gBlob) * blobScale
         const baseVisR = DISC_RADIUS_BASE * 2;       // approx on-screen radius when blobScale=2
 
-        const visMult = seen ? SEEN_VIS_THICK_MULT : UNSEEN_VIS_THICK_MULT;
+        const visMult = (SEEN_VIS_THICK_MULT * seenVis01) + (UNSEEN_VIS_THICK_MULT * (1.0 - seenVis01));
         const desiredVisR = baseVisR * s * visMult; // scale with digit size and state
 
 
@@ -288,7 +292,7 @@
 
         // threshold: 大きいほど細く/切れやすい。大画面では少し下げて繋がりを優先。
         let thr = THRESH_BASE - (s - 1) * 0.06;
-        if (!seen) thr += UNSEEN_THR_BIAS;
+        thr += UNSEEN_THR_BIAS * (1.0 - seenVis01);
         thr = Math.max(0.52, Math.min(0.76, thr));
         THRESH_LEVEL = thr;
 
@@ -337,7 +341,7 @@ function applyFitScale(){
         applyFitScale();
         const waitFonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
         waitFonts.then(()=>{ rebuildTargets(); setTimeout(rebuildTargets, 0); });
-        updateDiag('診断: OK / slime-guided v0.1.15');
+        updateDiag('診断: OK / slime-guided v0.1.16');
       };
 
       function layoutInitial(){
@@ -608,7 +612,7 @@ function triggerExplosion(){
         gBlob.noStroke();
 
         const r = DISC_RADIUS;
-        const BASE_ALPHA = (seen ? BASE_ALPHA_SEEN : BASE_ALPHA_UNSEEN);
+        const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
         // Colon second-tick (":")
         const now = new Date();
         const sec = now.getSeconds();
@@ -704,6 +708,14 @@ function triggerExplosion(){
         const camSeen = cam.enabled ? (now-cam.lastSeenAt<=SEEN_DEBOUNCE_MS) : false;
         const effectiveSeen = cam.enabled ? camSeen : seen;
         seen = effectiveSeen;
+        // Smoothly blend visual parameters to prevent sudden thickness jump on state change
+        {
+          const target = seen ? 1.0 : 0.0;
+          const k = (target > seenVis01) ? SEEN_VIS_LERP_IN : SEEN_VIS_LERP_OUT;
+          seenVis01 += (target - seenVis01) * k;
+          if (seenVis01 < 0) seenVis01 = 0; else if (seenVis01 > 1) seenVis01 = 1;
+        }
+
 
         // Rising / Falling edge
         if (!prevSeen && seen){
