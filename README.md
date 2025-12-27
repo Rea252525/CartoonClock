@@ -1,4 +1,8 @@
-# Cartoon Clock / サボる時計 (v0.2.0)
+# Cartoon Clock / サボる時計 (v0.2.1)
+
+## v0.2.1 変更点（制作_v8）
+- main.js の構文エラーを修正（`Camera state` のコメント漏れ / ブート周りの崩れを整理）
+- デバッグUI（動作確認）まわりの呼び出しを安定化
 
 ## v0.2.0 変更点（制作_v8）
 - 状態遷移を4フェーズ（IDLE / ENTER / SHOW / EXIT+POST）で再設計

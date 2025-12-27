@@ -1,1415 +1,1019 @@
+/*
+  Cartoon Clock / サボる時計
+  v0.2.1 (制作_v8)
+
+  - 4秒ルール（続き / 新セッション）
+  - 3秒ルール（ご褒美 EXIT）
+  - ENTER 5パターン / EXIT 3パターン + POST
+  - デバッグUI（強制遷移・追従シミュ）
+
+  NOTE:
+  - まず「動作確認」を優先し、見た目は v0.1.17 の雰囲気を維持しつつ簡略化しています。
+*/
 
 (function(){
   'use strict';
+
   function boot(){
-    const VERSION = 'v0.2.0';
+    const VERSION = 'v0.2.1';
     console.log('[Saboclock]', VERSION);
 
-    // ---------------- Config ----------------
-    const DPR = Math.min(window.devicePixelRatio || 1, 2);
-    const DESIGN_W = 1920;
-    const DESIGN_H = 1080;
-    const DESIGN_ASPECT = DESIGN_W / DESIGN_H;
-    const N = 1650;
-    const HN = 770, MN = 770, SN = 0;
-    const CN = 110;          // H/M/S allocation
-    const IDLE_JITTER = 0.35, SEEK_STRENGTH = 0.085, DAMP = 0.78;
-    const DETECT_EVERY_N_FRAMES = 6, SEEN_DEBOUNCE_MS = 1200;
+    // ---------- DOM ----------
+    const holder = document.getElementById('canvas-holder');
+    const btnSettings = document.getElementById('btnSettings');
+    const settingsPanel = document.getElementById('settings-panel');
+    const btnCam = document.getElementById('btnCam');
+    const btnSim = document.getElementById('btnSim');
+    const fakeSeen = document.getElementById('fakeSeen');
+    const togglePreview = document.getElementById('togglePreview');
+    const camWrap = document.getElementById('camWrap');
+    const camVideo = document.getElementById('cam');
 
-    // ---- Linger-head gag ----
-    const LAG_FRACTION_MIN = 0.15, LAG_FRACTION_MAX = 0.25;
-    const LAG_LINGER_MIN_MS = 700, LAG_LINGER_MAX_MS = 1100;
-    const LAG_WIGGLE = 0.12, CATCHUP_MS = 320, CATCHUP_GAIN = 1.85;
-    
-    // Subtle life wobble when the clock is being seen (digits displayed)
-    const SEEN_WOBBLE = 8.32;       // px amplitude of wobble
-    const WOBBLE_BASE_HZ = 0.10;     // base cycles per second
-    const WOBBLE_JITTER_HZ = 16.24;   // per-particle frequency variation
+    const useSim = document.getElementById('useSim');
+    const simHasFace = document.getElementById('simHasFace');
+    const simFaceX = document.getElementById('simFaceX');
+    const simFaceY = document.getElementById('simFaceY');
+    const simFaceDist = document.getElementById('simFaceDist');
 
-    // ---- 見られた瞬間のイージング用パラメータ（全部ここで調整できます） ----
-    // 時間帯の境界（秒）
-    // それ以上は Tier3 (10分以上: かなり派手)
+    const dbgGoIdle = document.getElementById('dbgGoIdle');
+    const dbgGoShow = document.getElementById('dbgGoShow');
+    const dbgContinue = document.getElementById('dbgContinue');
+    const dbgNewSession = document.getElementById('dbgNewSession');
+    const dbgEnterSel = document.getElementById('dbgEnterSel');
+    const dbgEnterGo = document.getElementById('dbgEnterGo');
+    const dbgExitSel = document.getElementById('dbgExitSel');
+    const dbgExitGo = document.getElementById('dbgExitGo');
+    const dbgReadout = document.getElementById('dbgReadout');
 
-    // 各時間帯ごとの全体スピード倍率（大きくすると速く数字に集まる）
-
-    // ---- Expo 系（Tier1）のカーブ形状 ----
-    // Expo の「鋭さ」。大きいほど最初ドンッと動いて、終盤でよりゆっくりになる。
-    // 時間の進み方を変えるための指数。>1で序盤ゆっくり / <1で序盤速く。
-
-    // ---- オーバーシュート（Tier2 / Tier3）のカーブ形状 ----
-    // 内部時間の進み方。>1で序盤ゆっくり / <1で序盤速く。
-
-    // どのくらい通り過ぎるか
-    //  0.5 → 100→150→100 / 1.0 → 100→200→100 くらいのイメージ
-
-    // 波線が頂点に到達するタイミング（0〜1）。1に近いほど「最後の一瞬でビヨン」と通り過ぎる。
-
-    // 100→頂点に行くときの easeOutExpo の鋭さ
-
-    // 頂点→100 に戻るときの easeInExpo の鋭さ
-
-    // ==== Cartoon Clock 誇張演出「数値いじれるゾーン」 ====
-    // 卒制中に触りたくなるパラメータは全部ここに集約しています。
-    // ※ここだけいじれば、赤さ・ピクピク度・爆発の速さなどが一括で調整できます。
-
-    // 1) 赤くなり始めるタイミング（秒）
-
-    // 2) 真っ赤になってから爆発するまで（秒）
-
-    // 3) 赤さ＆チャージの「追従スピード」
-
-    // 4) 数字がパンッパンに膨れ上がる量
-
-    // 5) 真っ赤〜爆発待ち1秒の「ピクピク震え」
-
-    // 6) 爆発直前に中心へギュウッと寄るタイミング
-
-    // 7) 爆発したあとの「液体の飛び散り方」
-    const EXPLOSION_SPEED_MIN = 20.0;         // 爆発直後の最小スピード
-    const EXPLOSION_SPEED_MAX = 40.0;         // 爆発直後の最大スピード
-    const EXPLOSION_DAMP = 0.992;             // 爆発中の減速率（1.0に近いほど長く飛ぶ）
-    const EXPLOSION_JITTER_GAIN = 0.35;       // 爆発中のランダム揺れの強さ
-
-    // スクアッシュ＆ストレッチは現在未使用（必要になったらここで復活させる）
-
-    // ---- ここまでをいじると、波線（イージング）のキャラクターをかなり細かく変えられます ----
-
-    // ---- SLIME renderer params (guided) ----
-    // NOTE:
-    // 画面が小さいと「太りすぎて潰れる」/ 画面が大きいと「途切れ途切れになる」問題は、
-    // DISC_RADIUS / BLUR / THRESH が“固定値”だったのが主因。
-    // ここでは「数字(レイアウト)スケール」と「slimeバッファ解像度(blobScale)」に合わせて
-    // 毎フレーム自動で最適化するように変更しています（v0.1.13）。
-    const MAX_BLOB_PIXELS = 1800000;       // slimeバッファの上限（小さすぎると荒れる / 大きすぎると重い）
-    const MAX_SAMPLE_PARTICLES = 1600;     // (未使用だが互換のため残す)
-
-    // --- Base (design @ 1920x1080, blobScale≈2) ---
-    const DISC_RADIUS_BASE = 11.5;         // gBlob上の半径（基準）
-    const BLUR_BASE = 2.5;
-    const THRESH_BASE = 0.70;
-
-    // --- Appearance tuning (v0.2.0) ---
-    // Make GitHub Pages and local rendering closer.
-    const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
-    const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT; // keep same to avoid thickness jump    // thickness multiplier when unseen
-    const UNSEEN_THR_BIAS = -0.12;         // lower threshold when unseen (helps blobs survive)         // lower threshold when unseen
-
-    const BASE_ALPHA_SEEN = 26;            // ink amount when seen
-    const BASE_ALPHA_UNSEEN = 38;          // ink amount when unseen          // ink amount when unseen
-
-    // --- Responsive runtime params (updated in updateSlimeParams) ---
-    let DISC_RADIUS = DISC_RADIUS_BASE;
-    let BLUR_AMOUNT = BLUR_BASE;
-    let THRESH_LEVEL = THRESH_BASE;
-    let GUIDE_RADIUS = Math.floor(DISC_RADIUS_BASE * 0.75);
-
-    const USE_GUIDE = true;               // draw faint target guides when seen
-    const GUIDE_ALPHA = 6;                // 0..255 faint
-    const GUIDE_STRIDE = 2;               // use every n-th target
-
-    // Font
-    const USE_FONT = true;
-    const FONT_FAMILY_PRIMARY = 'Inter';
-    const FONT_FAMILY_LOCAL   = 'ClockFontLocal';
-    let FONT_WEIGHT = 100;
-    const LETTER_SPACING = 0.02;
-    let fontSize = 280;
-
-    // ---- Easing functions for 見られた瞬間の変形（すべて定数経由） ----
-    function easeOutExpoParam(t, steep, timePower){
-      if (t <= 0) return 0;
-      if (t >= 1) return 1;
-      const u = Math.pow(t, timePower);
-      return 1 - Math.pow(2, -steep * u);
+    if (btnSettings && settingsPanel){
+      btnSettings.addEventListener('click', ()=>{
+        const visible = settingsPanel.style.display === 'block';
+        settingsPanel.style.display = visible ? 'none' : 'block';
+      });
     }
 
-    function easeInExpoParam(t, steep, timePower){
-      if (t <= 0) return 0;
-      if (t >= 1) return 1;
-      const u = Math.pow(t, timePower);
-      // 0→1 に向かってだんだん加速する Expo
-      return Math.pow(2, steep * (u - 1));
-    }
+    // ---------- Camera (optional) ----------
+    const cam = {
+      enabled: false,
+      preview: false,
+      stream: null,
+      detector: null,
+      api: 'none',
+      lastSeenAt: 0,
+      lastBox: null, // {x,y,width,height}
+      motion: { prev:null, w:160, h:90, tmp:null, tctx:null },
+    };
 
-    // 0→100→頂点→100 のうち、「0→頂点」と「頂点→100」を
-    // それぞれ easeOutExpo / easeInExpo でつないだオーバーシュート用イージング。
-    function expoOvershootBlendParam(t, overshootAmount, peakFrac, timePower, outSteep, inSteep){
-      if (t <= 0) return 0;
-      if (t >= 1) return 1;
+    async function startCamera(){
+      if (!camVideo) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio:false });
+        cam.stream = stream;
+        camVideo.srcObject = stream;
+        await camVideo.play();
+        cam.enabled = true;
+        cam.preview = !!(togglePreview && togglePreview.checked);
+        if (camWrap) camWrap.style.display = cam.preview ? 'block' : 'none';
 
-      // 時間の進み方を少し曲げる
-      const tt = Math.pow(t, timePower);
-      const peak = 1 + overshootAmount; // 1.0=100 に対して overshootAmount=0.5 なら 150 まで行く
+        if ('FaceDetector' in window){
+          cam.detector = new window.FaceDetector({ fastMode:true, maxDetectedFaces: 1 });
+          cam.api = 'FaceDetector';
+        } else {
+          cam.motion.tmp = document.createElement('canvas');
+          cam.motion.tmp.width = cam.motion.w;
+          cam.motion.tmp.height = cam.motion.h;
+          cam.motion.tctx = cam.motion.tmp.getContext('2d', { willReadFrequently:true });
+          cam.api = 'Motion';
+        }
 
-      if (tt <= peakFrac){
-        // 0→頂点 までを easeOutExpo で
-        const u = tt / peakFrac; // 0〜1
-        const e = easeOutExpoParam(u, outSteep, 1.0); // timePower は外側でかけたので 1.0 固定
-        return peak * e; // 0→peak
-      } else {
-        // 頂点→100 までを easeInExpo で
-        const u = (tt - peakFrac) / (1 - peakFrac); // 0〜1
-        const e = easeInExpoParam(u, inSteep, 1.0);
-        // peak から 1.0 へ戻る
-        return peak + (1 - peak) * e;
+        if (fakeSeen) fakeSeen.checked = false;
+        if (useSim) useSim.checked = false;
+      } catch (e){
+        console.error(e);
+        alert('カメラが開始できませんでした（権限 / 環境を確認してください）');
       }
     }
 
-    let sketch = (p)=>{
-      // --------------- State ---------------
-      let pts = new Array(N).fill(0).map(()=>({x:0,y:0,vx:0,vy:0,tx:0,ty:0, group:0, activeAt:0, ax:0, ay:0, catchUntil:0, sx:0, sy:0, catchStart:0, catchTier:0}));
-      let seen = true, prevSeen = true, lastTimeStr = "";
-      // Visual smoothing: avoid "pakki" thickness jump when switching seen/unseen
-      let seenVis01 = 1.0; // 1=seen look, 0=unseen look (smoothed)
-      const SEEN_VIS_LERP_IN = 0.25;  // how fast visuals snap when becoming seen
-      const SEEN_VIS_LERP_OUT = 0.07; // how slow visuals fade when becoming unseen
-      let frames=0, lastFPS=0, lastFPSTime=performance.now();
-      le// ---------------- Cartoon Clock v0.2.0 State Machine ----------------
-// hasFace の喪失時刻（4秒ルール用）
-let lastFaceLostAt = null;
-// 状態開始時刻（3秒ルール・各アニメ進行用）
-let stateStartedAt = performance.now();
-
-// 状態
-const STATE = Object.freeze({
-  IDLE_SABORU: 'IDLE_SABORU',
-
-  ENTER_QUICK_SQUASH: 'ENTER_QUICK_SQUASH',
-  ENTER_VERTICAL_BOUNCE: 'ENTER_VERTICAL_BOUNCE',
-  ENTER_HORIZONTAL_BOUNCE: 'ENTER_HORIZONTAL_BOUNCE',
-  ENTER_RANDOM_BOUNCE: 'ENTER_RANDOM_BOUNCE',
-  ENTER_EDGE_SQUASH: 'ENTER_EDGE_SQUASH',
-  ENTER_SQUASH_WITH_LAG: 'ENTER_SQUASH_WITH_LAG',
-
-  SHOW_TIME: 'SHOW_TIME',
-
-  EXIT_RED_EXPLOSION: 'EXIT_RED_EXPLOSION',
-  EXIT_FADE_OUT: 'EXIT_FADE_OUT',
-  EXIT_ZOOM_OUT_TRACKING: 'EXIT_ZOOM_OUT_TRACKING',
-
-  POST_RED_EXPLOSION: 'POST_RED_EXPLOSION',
-  POST_FADE_OUT_INVISIBLE: 'POST_FADE_OUT_INVISIBLE',
-  POST_ZOOM_OUT_TRACKING: 'POST_ZOOM_OUT_TRACKING',
-
-  RECOVER_RED: 'RECOVER_RED',
-  RECOVER_FADE: 'RECOVER_FADE',
-  RECOVER_ZOOM: 'RECOVER_ZOOM',
-});
-
-let state = STATE.IDLE_SABORU;
-let stateData = {};
-
-// ビジュアル制御（drawSlime で参照）
-let slimeHeat01 = 0.0;      // 0=白, 1=赤
-let slimeAlpha01 = 1.0;     // 0=透明, 1=表示
-let colonBlinkSpeed = 1.0;  // 1=通常, >1 で高速化
-
-// 追従ギャグ（遠のく時計）用
-let clockScale = 1.0;
-let clockOffX = 0.0;
-let clockOffY = 0.0;
-
-// CLOCK中心（rebuildTargets で更新）
-let CLOCK_CX = 960, CLOCK_CY = 540;
-
-// draw 用の dt
-let prevNowMs = performance.now();
- Camera state
-      const cam = { enabled:false, preview:false, video: document.getElementById('cam'), wrap: document.getElementById('camWrap'),
-                    stream:null, detector:null, api:'none', lastSeenAt: 0,
-                    motion: {prev:null, w:160, h:90, tmp:null, tctx:null} };
-
-      // UI
-      const holder = document.getElementById('canvas-holder');
-      const fakeSeen = document.getElementById('fakeSeen');
-      const btnCam = document.getElementById('btnCam');
-      const btnSim = document.getElementById('btnSim');
-      const togglePreview = document.getElementById('togglePreview');
-      const btnSettings = document.getElementById('btnSettings');
-      const settingsPanel = document.getElementById('settings-panel');
-
-      // 設定パネルの開閉（左上の小さい⚙ボタン）
-      if (btnSettings && settingsPanel){
-        btnSettings.addEventListener('click', ()=>{
-          const visible = settingsPanel.style.display === 'block';
-          settingsPanel.style.display = visible ? 'none' : 'block';
-        });
+    function stopCamera(){
+      cam.enabled = false;
+      cam.lastBox = null;
+      if (cam.stream){
+        for (const t of cam.stream.getTracks()) t.stop();
       }
+      cam.stream = null;
+      if (camWrap) camWrap.style.display = 'none';
+      if (camVideo) camVideo.srcObject = null;
+    }
 
-      if (fakeSeen){
-        fakeSeen.addEventListener('change', ()=>{ seen = fakeSeen.checked; });
-        seen = fakeSeen.checked;
-      }
+    async function toggleCamera(){
+      if (cam.enabled) stopCamera();
+      else await startCamera();
+    }
 
-      if (btnSim){
-        btnSim.addEventListener('click', ()=>{
-          cam.enabled = false;
-          if (cam.wrap) cam.wrap.style.display = 'none';
-          seen = true;
-          if (fakeSeen) fakeSeen.checked = true;
-          updateDiag('診断: シミュレーション ON');
-        });
-      }
-
-      if (togglePreview){
-        // 初期状態は OFF
-        togglePreview.checked = false;
-        cam.preview = false;
-        togglePreview.addEventListener('change', ()=>{
-          cam.preview = togglePreview.checked;
-          if (cam.wrap){
-            cam.wrap.style.display = (cam.preview && cam.enabled) ? 'block' : 'none';
+    function runDetection(nowMs){
+      if (!cam.enabled) return;
+      if (cam.api === 'FaceDetector' && cam.detector){
+        cam.detector.detect(camVideo).then((faces)=>{
+          if (faces && faces.length > 0){
+            cam.lastSeenAt = nowMs;
+            const b = faces[0].boundingBox;
+            cam.lastBox = { x: b.x, y: b.y, width: b.width, height: b.height };
           }
-        });
+        }).catch(()=>{});
+      } else if (cam.api === 'Motion'){
+        const {w,h,tctx} = cam.motion;
+        if (!tctx) return;
+        tctx.drawImage(camVideo, 0, 0, w, h);
+        const frame = tctx.getImageData(0,0,w,h);
+        if (!cam.motion.prev){
+          cam.motion.prev = frame;
+        } else {
+          const prev = cam.motion.prev;
+          let sum = 0;
+          for (let i=0;i<frame.data.length;i+=4){
+            sum += Math.abs(frame.data[i]-prev.data[i]);
+            sum += Math.abs(frame.data[i+1]-prev.data[i+1]);
+            sum += Math.abs(frame.data[i+2]-prev.data[i+2]);
+          }
+          const avg = sum/(w*h)/3;
+          if (avg > 20) cam.lastSeenAt = nowMs;
+          cam.motion.prev = frame;
+        }
+      }
+    }
+
+    if (togglePreview){
+      togglePreview.addEventListener('change', ()=>{
+        cam.preview = !!togglePreview.checked;
+        if (camWrap) camWrap.style.display = (cam.enabled && cam.preview) ? 'block' : 'none';
+      });
+    }
+
+    if (btnCam) btnCam.addEventListener('click', ()=>{ toggleCamera(); });
+    if (btnSim) btnSim.addEventListener('click', ()=>{
+      if (useSim) useSim.checked = true;
+      if (simHasFace) simHasFace.checked = true;
+      if (fakeSeen) fakeSeen.checked = true;
+    });
+
+    // ---------- p5 sketch ----------
+    const sketch = (p)=>{
+      // ---- Design / Particles ----
+      const DESIGN_W = 1920;
+      const DESIGN_H = 1080;
+
+      const N = 1650;
+      const HN = 770;
+      const MN = 770;
+      const CN = 110;
+
+      // digits layout (design coords)
+      const H_POS = { x: 660, y: 540 };
+      const M_POS = { x: 1260, y: 540 };
+      const COLON_POS = { x: 960, y: 515 };
+
+      // sizes (relative to height)
+      const SIZE_HM_REL = 0.325;   // ~350 @1080
+      const SIZE_COLON_REL = 0.185; // ~200 @1080
+
+      // slime
+      const MAX_BLOB_PIXELS = 1800000;
+      let blobScale = 2;
+      let discR = 11.5;
+      let blurAmt = 2.5;
+      let thr = 0.70;
+
+      // physics
+      const IDLE_JITTER = 0.35;
+      const SEEK_BASE = 0.085;
+      const DAMP_BASE = 0.78;
+
+      // states
+      const STATE = Object.freeze({
+        IDLE_SABORU: 'IDLE_SABORU',
+
+        ENTER_QUICK_SQUASH: 'ENTER_QUICK_SQUASH',
+        ENTER_VERTICAL_BOUNCE: 'ENTER_VERTICAL_BOUNCE',
+        ENTER_HORIZONTAL_BOUNCE: 'ENTER_HORIZONTAL_BOUNCE',
+        ENTER_RANDOM_BOUNCE: 'ENTER_RANDOM_BOUNCE',
+        ENTER_EDGE_SQUASH: 'ENTER_EDGE_SQUASH',
+        ENTER_SQUASH_WITH_LAG: 'ENTER_SQUASH_WITH_LAG',
+
+        SHOW_TIME: 'SHOW_TIME',
+
+        EXIT_RED_EXPLOSION: 'EXIT_RED_EXPLOSION',
+        EXIT_FADE_OUT: 'EXIT_FADE_OUT',
+        EXIT_ZOOM_OUT_TRACKING: 'EXIT_ZOOM_OUT_TRACKING',
+
+        POST_RED_EXPLOSION: 'POST_RED_EXPLOSION',
+        POST_FADE_OUT_INVISIBLE: 'POST_FADE_OUT_INVISIBLE',
+        POST_ZOOM_OUT_TRACKING: 'POST_ZOOM_OUT_TRACKING',
+
+        RECOVER_RED: 'RECOVER_RED',
+        RECOVER_FADE: 'RECOVER_FADE',
+        RECOVER_ZOOM: 'RECOVER_ZOOM',
+      });
+
+      let state = STATE.IDLE_SABORU;
+      let stateStartedAt = performance.now();
+      let lastFaceLostAt = performance.now() - 999999;
+      let stateData = {};
+
+      // face input
+      let hasFace = false;
+      let prevHasFace = false;
+      let faceX01 = 0.5;
+      let faceY01 = 0.5;
+      let faceClose01 = 0.5;
+
+      // visual controls
+      let slimeHeat01 = 0.0;   // 0=white,1=red
+      let slimeAlpha01 = 1.0;  // 0..1
+      let colonBlinkSpeed = 1.0; // 1=normal
+      let clockScale = 1.0;
+      let clockOffX = 0.0;
+      let clockOffY = 0.0;
+      let squashX = 1.0;
+      let squashY = 1.0;
+
+      // particles
+      const pts = new Array(N).fill(0).map((_,i)=>({
+        x:0,y:0,vx:0,vy:0,
+        tx:0,ty:0,
+        group: (i < HN) ? 0 : (i < HN+MN ? 1 : 2),
+        activeAt: 0,
+      }));
+
+      // buffers
+      let gBlob = null;
+      let gText = null;
+
+      // time targets
+      let lastHM = '';
+
+      // ---- utils ----
+      const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+      const lerp = (a,b,t)=>a+(b-a)*t;
+      const easeOutQuint = (t)=>1 - Math.pow(1-t,5);
+      const easeInOutCubic = (t)=> t<0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+
+      function nowMs(){ return performance.now(); }
+
+      function setState(s, data){
+        state = s;
+        stateData = data || {};
+        stateStartedAt = nowMs();
       }
 
-      if (btnCam){
-        btnCam.addEventListener('click', startCamera);
+      function clockHM(){
+        const d = new Date();
+        const pad = (n)=>String(n).padStart(2,'0');
+        return pad(d.getHours()) + pad(d.getMinutes());
       }
 
-      // 画面表示には出さず、デバッグログだけに出す
-      function updateDiag(text){
-        try { console.log(text); } catch(e){}
-      }
-
-      // Canvas + slime buffer
-      let gBlob = null, blobScale = 4;
-      // layoutScale: 最短辺(≈1080px)に対するスケール。数字や液体の「大きさ」用
-      let layoutScale = 1;
-      // DIGIT_SCALE: 画面が極端に縦長などの場合に、数字とコロンが重ならないようにするための追加スケール
-      let DIGIT_SCALE = 1;
-
-      // --- Responsive slime params ---
-      // DISC_RADIUS / BLUR / THRESH を「数字スケール」と「gBlob解像度」に合わせて自動調整
-      // 目的:
-      //  - 小さい画面: 太りすぎて潰れるのを防ぐ（細く・シャープに）
-      //  - 大きい画面: 途切れ途切れを防ぐ（繋がりを戻す）
-      function updateSlimeParams(){
-        // 数字の見た目サイズ（レイアウトスケール×重なり回避スケール）
-        const s = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
-        const bs = Math.max(1, blobScale || 2);
-
-        // 基準(1080p付近 / blobScale≈2)での「画面上の半径」をベースに、数字サイズに比例させる
-        // 画面上の半径 ≈ DISC_RADIUS(gBlob) * blobScale
-        const baseVisR = DISC_RADIUS_BASE * 2;       // approx on-screen radius when blobScale=2
-
-        const visMult = (SEEN_VIS_THICK_MULT * seenVis01) + (UNSEEN_VIS_THICK_MULT * (1.0 - seenVis01));
-        const desiredVisR = baseVisR * s * visMult; // scale with digit size and state
-
-
-        // gBlob上の半径に戻す（blobScaleが上がっても二重に太らないようにする）
-        let r = desiredVisR / bs;
-        r = Math.max(5.0, Math.min(18.0, r));        // 安定クランプ（極端な端末で破綻しにくく）
-        DISC_RADIUS = r;
-
-        // blur: 半径に比例（rが小さいときはぼかしも小さく）
-        let blur = r * 0.22;
-        blur = Math.max(1.2, Math.min(4.2, blur));
-        BLUR_AMOUNT = blur;
-
-        // threshold: 大きいほど細く/切れやすい。大画面では少し下げて繋がりを優先。
-        let thr = THRESH_BASE - (s - 1) * 0.06;
-        thr += UNSEEN_THR_BIAS * (1.0 - seenVis01);
-        thr = Math.max(0.52, Math.min(0.76, thr));
-        THRESH_LEVEL = thr;
-
-        // guide
-        GUIDE_RADIUS = Math.max(2, Math.floor(r * 0.55));
-      }
-
-      function resize(){
-        const vw = window.innerWidth || DESIGN_W;
-        const vh = window.innerHeight || DESIGN_H;
-
-        // キャンバスサイズ = 端末の画面サイズ（ウィンドウサイズ）
-        p.resizeCanvas(vw, vh);
-
-        // 最短辺を基準にしたスケール（どの比率でも形がほぼ一定になるように）
-        const base = Math.min(vw, vh);
-        layoutScale = base / DESIGN_H;  // DESIGN_H(1080) を基準スケールとして扱う
-
-        // slime バッファ解像度をキャンバスサイズベースで決定（縦横比は画面と同じ）
-        const area = vw * vh;
+      function updateBlobParams(){
+        const area = Math.max(1, p.width * p.height);
         blobScale = Math.max(2, Math.ceil(Math.sqrt(area / MAX_BLOB_PIXELS)));
-        const bw = Math.max(64, Math.floor(vw / blobScale));
-        const bh = Math.max(64, Math.floor(vh / blobScale));
+        const s = Math.max(0.35, Math.min(1.6, Math.min(p.width/DESIGN_W, p.height/DESIGN_H)));
+        discR = 11.5 * s;
+        blurAmt = clamp(2.5 * s, 1.2, 4.2);
+        thr = clamp(0.70 - (s-1)*0.06, 0.52, 0.76);
+
+        const bw = Math.max(64, Math.floor(p.width / blobScale));
+        const bh = Math.max(64, Math.floor(p.height / blobScale));
         gBlob = p.createGraphics(bw, bh);
-        gBlob.pixelDensity(DPR);
-        layoutInitial(); rebuildTargets();
-        updateSlimeParams();
+        gBlob.pixelDensity(1);
       }
 
-
-function applyFitScale(){
-        const c = holder.querySelector('canvas');
-        if (c){
-          c.style.position = 'absolute';
-          c.style.left = '50%';
-          c.style.top = '50%';
-          c.style.transform = 'translate(-50%, -50%)';
-          c.style.transformOrigin = 'center center';
-        }
+      function ensureTextBuffer(){
+        gText = p.createGraphics(p.width, p.height);
+        gText.pixelDensity(1);
       }
 
-      p.setup = function(){
-        const c = p.createCanvas(16, 9); c.parent(holder);
-        p.pixelDensity(DPR); p.frameRate(60);
-        resize();
-        applyFitScale();
-        const waitFonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
-        waitFonts.then(()=>{ rebuildTargets(); setTimeout(rebuildTargets, 0); });
-        updateDiag('診断: OK / slime-guided v0.2.0');
-      };
-
-      function layoutInitial(){
-
-        for (let i=0;i<N;i++){
-          const g = (i<HN)?0:(i<HN+MN?1:2); // 0: H, 1: M, 2: コロン
-          pts[i].x = Math.random()*p.width; pts[i].y = Math.random()*p.height;
-          pts[i].vx = pts[i].vy = 0; pts[i].group = g;
-          pts[i].activeAt = 0; pts[i].ax = pts[i].x; pts[i].ay = pts[i].y; pts[i].catchUntil = 0;
-        }
-      }
-
-      function clockString(){ const d=new Date(); const pad=n=>String(n).padStart(2,'0'); return pad(d.getHours())+pad(d.getMinutes())+pad(d.getSeconds()); }
-
-      // ----- Font-based digits (fill) -----
-      function drawFontDigits(g, text, size, cx, cy){
+      function drawFontText(g, text, sizePx, cx, cy, weight){
         const ctx = g.drawingContext;
         ctx.save();
-        const fam = `'${FONT_FAMILY_LOCAL}', '${FONT_FAMILY_PRIMARY}', sans-serif`;
-        ctx.font = `${FONT_WEIGHT} ${size}px ${fam}`;
+        ctx.clearRect(0,0,g.width,g.height);
+        ctx.fillStyle = '#fff';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#fff';
+        const fam = `'Inter', system-ui, -apple-system, sans-serif`;
+        ctx.font = `${weight} ${Math.round(sizePx)}px ${fam}`;
+
+        // measure with a tiny negative tracking for Inter feel
+        const tracking = -0.02;
         let total = 0;
         for (const ch of text){
           const w = ctx.measureText(ch).width;
-          total += w * (1 + LETTER_SPACING);
+          total += w * (1 + tracking);
         }
         let x = cx - total/2;
         for (const ch of text){
-          const w = ctx.measureText(ch).width * (1 + LETTER_SPACING);
+          const w = ctx.measureText(ch).width * (1 + tracking);
           ctx.fillText(ch, x, cy);
           x += w;
         }
         ctx.restore();
       }
 
-      function drawVectorDigits(g, text, size, cx, cy){
-        g.push(); g.translate(cx, cy);
-        g.stroke(255); g.strokeWeight(Math.max(2, size*0.065)); g.noFill();
-        if (g.drawingContext){ g.drawingContext.lineJoin='round'; g.drawingContext.lineCap='round'; }
-        const w=size*0.62, gap=size*0.18, halfH=size*0.52, halfW=w*0.5;
-        function b(){g.beginShape();} function v(x,y){g.vertex(x,y);} function e(){g.endShape();}
-        function digitPath(d, ox){
-          const hw=halfW, hh=halfH, r=size*0.2; g.push(); g.translate(ox,0);
-          switch(d){
-            case '0': g.rectMode(g.CENTER); g.rect(0,0,w,size*1.04,r); break;
-            case '1': b(); v(-hw*0.2,-hh); v(0,-hh); v(0,hh); e(); break;
-            case '2': b(); v(-hw,-hh+2); v(hw,-hh+2); v(hw,0); v(-hw,0); v(-hw,hh); v(hw,hh); e(); break;
-            case '3': b(); v(-hw,-hh+2); v(hw,-hh+2); v(hw,0); v(-hw*0.1,0); e(); b(); v(-hw*0.1,0); v(hw,0); v(hw,hh-2); v(-hw,hh-2); e(); break;
-            case '4': b(); v(-hw,-hh); v(-hw,0); v(hw,0); e(); b(); v(hw,-hh); v(hw,hh); e(); break;
-            case '5': b(); v(hw,-hh+2); v(-hw,-hh+2); v(-hw,0); v(hw,0); v(hw,hh-2); v(-hw,hh-2); e(); break;
-            case '6': g.ellipseMode(g.CENTER); g.ellipse(-hw*0.05, hh*0.25, w*1.0, size*0.9); b(); v(hw*0.7,-hh+2); v(-hw,-hh+2); v(-hw,0); v(hw,0); e(); break;
-            case '7': b(); v(-hw,-hh+2); v(hw,-hh+2); v(0,hh); e(); break;
-            case '8': g.ellipseMode(g.CENTER); g.ellipse(0,-hh*0.38,w*0.9,size*0.70); g.ellipse(0,hh*0.42,w*0.98,size*0.80); break;
-            case '9': g.ellipseMode(g.CENTER); g.ellipse(hw*0.05,-hh*0.25,w*1.0,size*0.9); b(); v(-hw,0); v(hw,0); v(hw,hh-2); v(-hw,hh-2); e(); break;
-            case ':': g.noStroke(); g.fill(255); g.circle(0,-hh*0.35,size*0.10); g.circle(0,hh*0.35,size*0.10); g.noFill(); g.stroke(255); break;
-          } g.pop();
-        }
-        const digW=size*0.62; const totalW = text.length*(digW+gap)-gap;
-        let x=-totalW/2+digW*0.5;
-        for (const ch of text){ digitPath(ch,x); x+=digW+gap; }
-        g.pop();
-      }
-
-      function buildTargetsFor(text, maxCount, xCenter, yCenter){
-        const g = p.createGraphics(Math.max(10, Math.floor(p.width*0.32)), p.height);
-        g.pixelDensity(1); g.clear(); g.background(0,0);
-        (USE_FONT ? drawFontDigits : drawVectorDigits)(g, text, fontSize, g.width/2, yCenter);
+      function sampleTargetsFromBuffer(g, count){
         g.loadPixels();
-        const d=g.pixelDensity(), W=g.width*d, H=g.height*d;
-        let step=Math.max(2, Math.floor(Math.min(p.width,p.height)*0.0035)*d); // denser than v0.8.0
-        const arr=[];
-        for (let y=0;y<H;y+=step){
-          for (let x=0;x<W;x+=step){
-            const a=g.pixels[4*(y*W+x)+3];
-            if (a>128){ arr.push({x: x/d + (xCenter - g.width/2), y: y/d}); }
+        const pts = [];
+        const step = 2;
+        for (let y=0; y<g.height; y+=step){
+          for (let x=0; x<g.width; x+=step){
+            const idx = 4*(y*g.width + x) + 3;
+            if (g.pixels[idx] > 0) pts.push({x,y});
           }
         }
-        if (arr.length>maxCount){
-          const stride=Math.max(1, Math.ceil(arr.length/maxCount));
-          const thin=[]; for (let i=0;i<arr.length;i+=stride) thin.push(arr[i]); return thin;
+        if (pts.length === 0){
+          // fallback
+          for (let i=0;i<count;i++) pts.push({x: p.width/2 + (Math.random()-0.5)*20, y: p.height/2 + (Math.random()-0.5)*20});
         }
-        return arr;
+        // pick evenly (deterministic-ish)
+        const out = new Array(count);
+        for (let i=0;i<count;i++){
+          out[i] = pts[(i * 997) % pts.length];
+        }
+        return out;
       }
 
-      
-function rebuildTargets(){
-        // 画面サイズに追従するレイアウト（比率ベース）
-        const W = p.width || DESIGN_W;
-        const H = p.height || DESIGN_H;
+      function rebuildTargets(){
+        if (!gText) ensureTextBuffer();
 
-        // 最短辺ベースのスケール（数字や液体の大きさをそろえる）
-        const base = Math.min(W, H);
-        layoutScale = base / DESIGN_H; // DESIGN_H(1080) を基準長さとして扱う
+        const hm = clockHM();
+        lastHM = hm;
+        const HH = hm.slice(0,2);
+        const MM = hm.slice(2,4);
 
-        // 元となるサイズ（1920x1080 デザイン基準）
-        const H_SIZE_BASE = 480 * layoutScale;
-        const M_SIZE_BASE = 480 * layoutScale;
-        const COLON_SIZE_BASE = 200 * layoutScale;
+        const s = Math.min(p.width/DESIGN_W, p.height/DESIGN_H);
+        const sizeHM = p.height * SIZE_HM_REL;
+        const sizeColon = p.height * SIZE_COLON_REL;
 
-        // 位置：元の 1920x1080 上の比率をそのまま画面比率にマッピング
-        const H_POS = { x: W * 0.2916667, y: H * 0.5370370 };  // (560,580) / (1920,1080)
-        const M_POS = { x: W * 0.7083333, y: H * 0.5370370 };  // (1360,580)
-        const COLON_POS = { x: W * 0.5,      y: H * 0.4907407 };
+        // positions scaled like design around center
+        const ox = (p.width - DESIGN_W*s)/2;
+        const oy = (p.height - DESIGN_H*s)/2;
+        const hx = ox + H_POS.x * s;
+        const hy = oy + H_POS.y * s;
+        const mx = ox + M_POS.x * s;
+        const my = oy + M_POS.y * s;
+        const cx = ox + COLON_POS.x * s;
+        const cy = oy + COLON_POS.y * s;
 
-        // 全体中心（ズーム/スク&スト用）
-        CLOCK_CX = (H_POS.x + M_POS.x) * 0.5;
-        CLOCK_CY = (H_POS.y + M_POS.y) * 0.5;  // (960,530)
+        // HH
+        drawFontText(gText, HH, sizeHM, hx, hy, 900);
+        const tH = sampleTargetsFromBuffer(gText, HN);
+        // MM
+        drawFontText(gText, MM, sizeHM, mx, my, 900);
+        const tM = sampleTargetsFromBuffer(gText, MN);
+        // :
+        drawFontText(gText, ':', sizeColon, cx, cy, 100);
+        const tC = sampleTargetsFromBuffer(gText, CN);
 
-        // --- 横方向の余裕に応じて DIGIT_SCALE を計算（重ならない程度に縮小） ---
-        // H(2桁)・コロン・M(2桁) のざっくりした幅を想定して、重なりそうなら縮小する
-        const dHC = Math.abs(COLON_POS.x - H_POS.x); // H中心〜コロン中心
-        const dCM = Math.abs(M_POS.x - COLON_POS.x); // コロン中心〜M中心
-
-        const DIGIT_ASPECT = 0.62;  // 1桁の横幅 ≒ 0.62 * fontSize（ざっくり）
-        const COLON_ASPECT = 0.50;  // コロンの横幅 ≒ 0.5 * fontSize（ざっくり）
-
-        const H_total_half = DIGIT_ASPECT * H_SIZE_BASE;     // H(2桁)の半分の幅 ≒ 2*0.62/2 * size
-        const M_total_half = DIGIT_ASPECT * M_SIZE_BASE;
-        const C_total_half = 0.5 * (COLON_ASPECT * COLON_SIZE_BASE);
-
-        const needHC = H_total_half + C_total_half; // H右端＋コロン左端がぶつからないために必要な半距離
-        const needCM = M_total_half + C_total_half; // コロン右端＋M左端
-
-        let scaleHC = dHC / needHC;
-        let scaleCM = dCM / needCM;
-
-        if (!isFinite(scaleHC) || scaleHC <= 0) scaleHC = 1;
-        if (!isFinite(scaleCM) || scaleCM <= 0) scaleCM = 1;
-
-        // 1 を超える場合はそのまま、1 未満なら縮小に使う
-        DIGIT_SCALE = Math.min(1, scaleHC, scaleCM);
-
-        // 最終的なサイズ
-        const H_SIZE = H_SIZE_BASE * DIGIT_SCALE;
-        const M_SIZE = M_SIZE_BASE * DIGIT_SCALE;
-        const COLON_SIZE = COLON_SIZE_BASE * DIGIT_SCALE;
-
-        // Per-group font weights（H/M と : のみ）
-        const WEIGHT_HM = 700, WEIGHT_COLON = 100;
-
-        const str = clockString(); lastTimeStr = str;
-        const HH = str.slice(0,2), MM = str.slice(2,4);
-
-        let txH = [], txM = [], txColon = [];
-        FONT_WEIGHT = WEIGHT_HM; fontSize = H_SIZE;  txH = buildTargetsFor(HH, HN, H_POS.x, H_POS.y);
-        FONT_WEIGHT = WEIGHT_HM; fontSize = M_SIZE;  txM = buildTargetsFor(MM, MN, M_POS.x, M_POS.y);
-        FONT_WEIGHT = WEIGHT_COLON; fontSize = COLON_SIZE; txColon = buildTargetsFor(':', CN, COLON_POS.x, COLON_POS.y);
-
-        function assign(start, count, targets){
-          for (let i = 0; i < count; i++){
-            const idx = start + i; const t = targets[i % targets.length];
-            pts[idx].tx = t.x; pts[idx].ty = t.y;
-          }
+        for (let i=0;i<HN;i++){
+          pts[i].tx = tH[i].x; pts[i].ty = tH[i].y;
         }
-        assign(0, HN, txH);
-        assign(HN, MN, txM);
-        assign(HN + MN, CN, txColon);
-
-        guides = txH.concat(txM, txColon);
-
-        // 数字サイズが確定したので、slime側の太さも追従させる
-        updateSlimeParams();
+        for (let i=0;i<MN;i++){
+          const a = pts[HN+i];
+          a.tx = tM[i].x; a.ty = tM[i].y;
+        }
+        for (let i=0;i<CN;i++){
+          const a = pts[HN+MN+i];
+          a.tx = tC[i].x; a.ty = tC[i].y;
+        }
       }
 
-
-
-
-
-      // cached guide points
-      let guides = [];
-
-      function scheduleLagCluster(now, delayMinMs, delayMaxMs, fraction){
-  // ENTER_SQUASH_WITH_LAG 用：一部の粒子だけ、少し遅れて「よろよろ」合流する
-  const count = Math.max(1, Math.floor((HN + MN) * (fraction || 0.04)));
-  const delayMin = delayMinMs || 350;
-  const delayMax = delayMaxMs || 800;
-
-  // いったん全員クリア
-  for (let i=0;i<N;i++){
-    pts[i].activeAt = 0;
-    pts[i].ax = pts[i].x;
-    pts[i].ay = pts[i].y;
-  }
-
-  // 連続インデックスで局所っぽい塊を作る（軽量）
-  const maxStart = Math.max(0, (HN + MN) - count - 1);
-  const start = Math.floor(Math.random() * (maxStart + 1));
-
-  for (let k=0;k<count;k++){
-    const i = start + k;
-    const a = pts[i];
-    const d = delayMin + Math.random() * (delayMax - delayMin);
-    a.activeAt = now + d;
-    a.ax = a.x;
-    a.ay = a.y;
-  }
-}
-
+      function instantGather(){
+        const cx = p.width*0.5;
+        const cy = p.height*0.5;
+        const r = Math.min(p.width, p.height) * 0.04;
         for (let i=0;i<N;i++){
           const a = pts[i];
-          a.activeAt   = 0;                  // 遅延集合は使わない
-          a.catchStart = now;                // この時点からイージングを開始
-          a.catchUntil = now + CATCHUP_MS;   // イージングが完了する時刻
-          a.catchTier  = tier;               // どのイージングを使うか
-          a.sx = a.x;                        // 液体状態の開始位置
-          a.sy = a.y;
-          a.catchBoost = undefined;          // 旧ロジック用の値はクリア（互換のため残しておく）
+          const ang = Math.random()*Math.PI*2;
+          const rr = Math.random()*r;
+          a.x = cx + Math.cos(ang)*rr;
+          a.y = cy + Math.sin(ang)*rr;
+          a.vx = 0;
+          a.vy = 0;
+          a.activeAt = 0;
         }
       }
 
-
-      async function startCamera(){
-        try{
-          const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}, audio:false});
-          cam.stream=stream; cam.video.srcObject=stream; await cam.video.play();
-          cam.enabled=true; cam.wrap.style.display=(cam.preview || (togglePreview && togglePreview.checked))?'block':'none';
-          if ('FaceDetector' in window){ cam.detector=new window.FaceDetector({fastMode:true, maxDetectedFaces:1}); cam.api='FaceDetector'; updateDiag('診断: FaceDetector'); }
-          else { cam.motion.tmp=document.createElement('canvas'); cam.motion.tmp.width=cam.motion.w; cam.motion.tmp.height=cam.motion.h; cam.motion.tctx=cam.motion.tmp.getContext('2d',{willReadFrequently:true}); cam.api='Motion'; updateDiag('診断: Motion Fallback'); }
-          if (fakeSeen) fakeSeen.checked=false;
-        }catch(e){ console.error(e); updateDiag('診断: カメラ不可（権限/環境）'); }
+      function startIdle(){
+        slimeHeat01 = 0.0;
+        slimeAlpha01 = 1.0;
+        colonBlinkSpeed = 1.0;
+        clockScale = 1.0;
+        clockOffX = 0.0;
+        clockOffY = 0.0;
+        squashX = squashY = 1.0;
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+          a.activeAt = 0;
+        }
+        setState(STATE.IDLE_SABORU, {});
       }
 
-      function runDetection(now){
-        if (!cam.enabled) return;
-        if (cam.api==='FaceDetector' && cam.detector){
-          cam.detector.detect(cam.video).then(faces=>{
-            if (faces && faces.length>0){
-              cam.lastSeenAt = now;
-              try {
-                const bb = faces[0].boundingBox;
-                if (bb && cam.video && cam.video.videoWidth){
-                  const vw = cam.video.videoWidth, vh = cam.video.videoHeight;
-                  cam.face = { x: bb.x, y: bb.y, w: bb.width, h: bb.height, vw, vh };
-                }
-              } catch(e){}
-            }
-          }).catch(()=>{});
-        } else if (cam.api==='Motion'){
-          const {w,h,tctx}=cam.motion; if (!tctx) return;
-          tctx.drawImage(cam.video,0,0,w,h);
-          const frame=tctx.getImageData(0,0,w,h);
-          if (!cam.motion.prev){ cam.motion.prev=frame; }
-          else {
-            const prev=cam.motion.prev; let sum=0; const n=frame.data.length;
-            for (let i=0;i<n;i+=4){
-              sum += Math.abs(frame.data[i]-prev.data[i]) + Math.abs(frame.data[i+1]-prev.data[i+1]) + Math.abs(frame.data[i+2]-prev.data[i+2]);
-            }
-            const avg = sum/(w*h)/3;
-            if (avg>20) cam.lastSeenAt=now;
-            cam.motion.prev=frame;
+      function startShow(){
+        rebuildTargets();
+        slimeHeat01 = 0.0;
+        slimeAlpha01 = 1.0;
+        colonBlinkSpeed = 1.0;
+        clockScale = 1.0;
+        clockOffX = 0;
+        clockOffY = 0;
+        squashX = squashY = 1.0;
+        setState(STATE.SHOW_TIME, {});
+      }
+
+      function startEnterQuickSquash(){
+        instantGather();
+        rebuildTargets();
+        setState(STATE.ENTER_QUICK_SQUASH, { dur: 650 });
+      }
+
+      function startEnterBounce(mode){
+        instantGather();
+        rebuildTargets();
+        const cx = p.width*0.5;
+        const cy = p.height*0.5;
+        const sp = Math.min(p.width, p.height) * 0.018;
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+          if (mode === 'V'){
+            a.vx = (Math.random()-0.5) * sp * 0.55;
+            a.vy = (Math.random()<0.5?-1:1) * (sp * (0.7 + Math.random()*0.8));
+          } else if (mode === 'H'){
+            a.vx = (Math.random()<0.5?-1:1) * (sp * (0.7 + Math.random()*0.8));
+            a.vy = (Math.random()-0.5) * sp * 0.55;
+          } else {
+            const ang = Math.random()*Math.PI*2;
+            const v = sp * (0.8 + Math.random()*1.1);
+            a.vx = Math.cos(ang)*v;
+            a.vy = Math.sin(ang)*v;
           }
+          // tiny kick away from exact center
+          a.x += (Math.random()-0.5)*6;
+          a.y += (Math.random()-0.5)*6;
+          // keep within
+          a.x = clamp(a.x, 0, p.width);
+          a.y = clamp(a.y, 0, p.height);
         }
+        const s = (mode==='V') ? STATE.ENTER_VERTICAL_BOUNCE : (mode==='H' ? STATE.ENTER_HORIZONTAL_BOUNCE : STATE.ENTER_RANDOM_BOUNCE);
+        setState(s, { dur: 1350 });
       }
 
-      
-function triggerExplosion(){
-        const cx = p.width * 0.5;
-        const cy = p.height * 0.5;
+      function startEnterEdgeSquash(){
+        rebuildTargets();
+        const edge = ['top','bottom','left','right'][Math.floor(Math.random()*4)];
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+          if (edge==='top'){
+            a.x = Math.random()*p.width;
+            a.y = -20 - Math.random()*30;
+          } else if (edge==='bottom'){
+            a.x = Math.random()*p.width;
+            a.y = p.height + 20 + Math.random()*30;
+          } else if (edge==='left'){
+            a.x = -20 - Math.random()*30;
+            a.y = Math.random()*p.height;
+          } else {
+            a.x = p.width + 20 + Math.random()*30;
+            a.y = Math.random()*p.height;
+          }
+          a.vx = 0;
+          a.vy = 0;
+          a.activeAt = 0;
+        }
+        setState(STATE.ENTER_EDGE_SQUASH, { dur: 1500, edge });
+      }
+
+      function startEnterSquashWithLag(){
+        instantGather();
+        rebuildTargets();
+        const now = nowMs();
+        // choose lag particles
+        const lagFrac = 0.20;
+        const lagN = Math.floor(N*lagFrac);
+        const chosen = new Set();
+        while (chosen.size < lagN){
+          chosen.add(Math.floor(Math.random()*N));
+        }
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+          a.activeAt = chosen.has(i) ? (now + 480 + Math.random()*520) : now;
+          // give them a 'yoroyoro'
+          a.vx = (Math.random()-0.5)*1.2;
+          a.vy = (Math.random()-0.5)*1.2;
+        }
+        setState(STATE.ENTER_SQUASH_WITH_LAG, { dur: 1550 });
+      }
+
+      function startEnterRandom5(){
+        const r = Math.random();
+        if (r < 0.20) startEnterBounce('V');
+        else if (r < 0.40) startEnterBounce('H');
+        else if (r < 0.60) startEnterBounce('R');
+        else if (r < 0.80) startEnterEdgeSquash();
+        else startEnterSquashWithLag();
+      }
+
+      function triggerExplosion(){
+        const cx = p.width*0.5;
+        const cy = p.height*0.5;
+        const minSp = Math.min(p.width,p.height)*0.018;
+        const maxSp = Math.min(p.width,p.height)*0.036;
         for (let i=0;i<N;i++){
           const a = pts[i];
           const dx = a.x - cx;
           const dy = a.y - cy;
           const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-          const nx = dx / dist;
-          const ny = dy / dist;
-          const speed = EXPLOSION_SPEED_MIN + Math.random() * (EXPLOSION_SPEED_MAX - EXPLOSION_SPEED_MIN);
+          const nx = dx/dist;
+          const ny = dy/dist;
+          const speed = minSp + Math.random()*(maxSp-minSp);
           a.vx = nx * speed;
           a.vy = ny * speed;
-          a.activeAt = 0;
-          a.catchUntil = 0;
-          a.sx = a.x;
-          a.sy = a.y;
         }
       }
 
-      function drawSlime(){
+      function startExitRandom3(){
+        const r = Math.random();
+        if (r < 0.34) startExitRedExplosion();
+        else if (r < 0.67) startExitFadeOut();
+        else startExitZoomOut();
+      }
+
+      function startExitRedExplosion(){
+        setState(STATE.EXIT_RED_EXPLOSION, { dur: 1400 });
+      }
+
+      function startExitFadeOut(){
+        setState(STATE.EXIT_FADE_OUT, { dur: 1400 });
+      }
+
+      function startExitZoomOut(){
+        setState(STATE.EXIT_ZOOM_OUT_TRACKING, { dur: 360 });
+      }
+
+      function startRecover(which){
+        if (which === 'RED') setState(STATE.RECOVER_RED, { dur: 1200 });
+        else if (which === 'FADE') setState(STATE.RECOVER_FADE, { dur: 1400 });
+        else setState(STATE.RECOVER_ZOOM, { dur: 900 });
+      }
+
+      // ---- debug UI hooks ----
+      function bindDebugUIOnce(){
+        if (dbgGoIdle) dbgGoIdle.addEventListener('click', ()=>{ startIdle(); });
+        if (dbgGoShow) dbgGoShow.addEventListener('click', ()=>{ startShow(); });
+        if (dbgContinue) dbgContinue.addEventListener('click', ()=>{ if (simHasFace) simHasFace.checked = true; if (useSim) useSim.checked = true; });
+        if (dbgNewSession) dbgNewSession.addEventListener('click', ()=>{ lastFaceLostAt = nowMs() - 5000; if (simHasFace) simHasFace.checked = true; if (useSim) useSim.checked = true; });
+
+        if (dbgEnterGo && dbgEnterSel) dbgEnterGo.addEventListener('click', ()=>{
+          if (useSim) useSim.checked = true;
+          if (simHasFace) simHasFace.checked = true;
+          lastFaceLostAt = nowMs() - 5000;
+          const v = dbgEnterSel.value;
+          if (v === 'ENTER_VERTICAL_BOUNCE') startEnterBounce('V');
+          else if (v === 'ENTER_HORIZONTAL_BOUNCE') startEnterBounce('H');
+          else if (v === 'ENTER_RANDOM_BOUNCE') startEnterBounce('R');
+          else if (v === 'ENTER_EDGE_SQUASH') startEnterEdgeSquash();
+          else if (v === 'ENTER_SQUASH_WITH_LAG') startEnterSquashWithLag();
+        });
+
+        if (dbgExitGo && dbgExitSel) dbgExitGo.addEventListener('click', ()=>{
+          if (useSim) useSim.checked = true;
+          if (simHasFace) simHasFace.checked = true;
+          const v = dbgExitSel.value;
+          if (v === 'EXIT_RED_EXPLOSION') startExitRedExplosion();
+          else if (v === 'EXIT_FADE_OUT') startExitFadeOut();
+          else if (v === 'EXIT_ZOOM_OUT_TRACKING') startExitZoomOut();
+        });
+      }
+
+      // ---- input update ----
+      function updateHasFaceAndFaceParams(now){
+        // 1) simulation UI
+        if (useSim && useSim.checked){
+          hasFace = !!(simHasFace && simHasFace.checked);
+          faceX01 = simFaceX ? parseFloat(simFaceX.value) : 0.5;
+          faceY01 = simFaceY ? parseFloat(simFaceY.value) : 0.5;
+          faceClose01 = simFaceDist ? parseFloat(simFaceDist.value) : 0.5;
+          return;
+        }
+
+        // 2) camera
+        if (cam.enabled){
+          const camSeen = (now - cam.lastSeenAt) <= 1200;
+          hasFace = camSeen;
+          if (cam.lastBox && camVideo && camVideo.videoWidth){
+            const vw = camVideo.videoWidth;
+            const vh = camVideo.videoHeight;
+            const cx = cam.lastBox.x + cam.lastBox.width * 0.5;
+            const cy = cam.lastBox.y + cam.lastBox.height * 0.5;
+            // mirror correction (preview is mirrored)
+            faceX01 = clamp(1.0 - (cx / vw), 0, 1);
+            faceY01 = clamp(cy / vh, 0, 1);
+            const area = (cam.lastBox.width * cam.lastBox.height) / Math.max(1, vw*vh);
+            faceClose01 = clamp((area - 0.02) / 0.12, 0, 1);
+          } else {
+            faceX01 = 0.5; faceY01 = 0.5; faceClose01 = hasFace ? 0.55 : 0.35;
+          }
+          return;
+        }
+
+        // 3) legacy checkbox
+        hasFace = !!(fakeSeen && fakeSeen.checked);
+        faceX01 = 0.5;
+        faceY01 = 0.5;
+        faceClose01 = hasFace ? 0.55 : 0.35;
+      }
+
+      function updateTransformsForZoomGag(){
+        const MAX_OFF_X = p.width * 0.18;
+        const MAX_OFF_Y = p.height * 0.18;
+        const offX = (0.5 - faceX01) * MAX_OFF_X; // face right -> clock left
+        const offY = (0.5 - faceY01) * MAX_OFF_Y; // face up -> clock down
+        const scaleFar = 1.05;
+        const scaleClose = 0.36;
+        const targetScale = lerp(scaleFar, scaleClose, faceClose01);
+
+        clockOffX += (offX - clockOffX) * 0.18;
+        clockOffY += (offY - clockOffY) * 0.18;
+        clockScale += (targetScale - clockScale) * 0.14;
+      }
+
+      // ---- rendering ----
+      function renderSlime(){
         if (!gBlob) return;
-
-        // 画面サイズの変化に応じて、描画パラメータを常に最新にする
-        updateSlimeParams();
-
         gBlob.push();
-        gBlob.blendMode(gBlob.BLEND);
         gBlob.background(0);
         gBlob.blendMode(gBlob.ADD);
         gBlob.noStroke();
 
-        const r = DISC_RADIUS;
-        const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
-        const alphaEff = BASE_ALPHA * Math.max(0.0, Math.min(1.0, slimeAlpha01));
-        const heat = Math.max(0.0, Math.min(1.0, slimeHeat01));
-        const colR = 255;
-        const colG = Math.round(255 * (1.0 - heat));
-        const colB = Math.round(255 * (1.0 - heat));
-        // Colon second-tick (":")
-        const t = (performance.now() * 0.001) * Math.max(0.2, colonBlinkSpeed);
-        const sec = Math.floor(t);
-        const u = t - sec; // 0..1 within this blink second
+        const baseAlpha = 28;
+        const r = discR;
 
-        // 細くなる最小スケール（かなり細め）
-        const COLON_THIN_SCALE = 0.28;
+        // colon blink: speed-up by time warp
+        const t = (Date.now() / 1000) * colonBlinkSpeed;
+        const frac = t - Math.floor(t);
+        const ease = easeOutQuint(frac);
+        const colonThin = 0.28;
+        const colonScale = lerp(colonThin, 1.0, ease);
+        const colonR = r * colonScale;
 
-        let colonScale;
-        if (!seen){
-          // 見られていないときはコロンの太さは一定（変化させない）
-          colonScale = 1.0;
-        } else {
-          // 偶数秒: 細い→太い（イーズアウト）
-          // 奇数秒: 太い→細い（イーズアウト）
-          const easeOut = 1 - Math.pow(1 - u, 5); // easeOutQuint に変更（https://easings.net/ja より）
-          if (sec % 2 === 0){
-            // even second → 太い側へ寄る
-            colonScale = COLON_THIN_SCALE + (1 - COLON_THIN_SCALE) * easeOut;
+        const strideHM = 1;
+        const strideC = 1;
+
+        for (let i=0;i<HN;i+=strideHM){
+          const a = pts[i];
+          gBlob.fill(255, baseAlpha);
+          gBlob.circle(a.x/blobScale, a.y/blobScale, r*2);
+        }
+        for (let i=HN;i<HN+MN;i+=strideHM){
+          const a = pts[i];
+          gBlob.fill(255, baseAlpha);
+          gBlob.circle(a.x/blobScale, a.y/blobScale, r*2);
+        }
+        for (let i=HN+MN;i<N;i+=strideC){
+          const a = pts[i];
+          gBlob.fill(255, baseAlpha);
+          gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2);
+        }
+
+        gBlob.pop();
+        try { gBlob.filter(p.BLUR, blurAmt); } catch(e){}
+        try { gBlob.filter(p.THRESHOLD, thr); } catch(e){ try { gBlob.filter(p.THRESHOLD); } catch(e2){} }
+
+        // tint (white -> red) + alpha
+        const g = Math.round(255 * (1.0 - slimeHeat01));
+        const b = g;
+        const a255 = Math.round(255 * slimeAlpha01);
+
+        p.push();
+        p.tint(255, g, b, a255);
+        p.image(gBlob, 0, 0, p.width, p.height);
+        p.pop();
+      }
+
+      // ---- physics update ----
+      function transformedTarget(a){
+        const cx = p.width*0.5;
+        const cy = p.height*0.5;
+        const sx = clockScale * squashX;
+        const sy = clockScale * squashY;
+        return {
+          x: cx + (a.tx - cx)*sx + clockOffX,
+          y: cy + (a.ty - cy)*sy + clockOffY,
+        };
+      }
+
+      function stepParticles(seekK, damp){
+        const cx = p.width*0.5;
+        const cy = p.height*0.5;
+        const idleBoxW = Math.min(p.width, p.height) * 0.55;
+        const idleBoxH = Math.min(p.width, p.height) * 0.28;
+
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+
+          if (state === STATE.IDLE_SABORU){
+            // idle wander around center area
+            a.vx = (a.vx + (Math.random()-0.5)*IDLE_JITTER) * 0.985;
+            a.vy = (a.vy + (Math.random()-0.5)*IDLE_JITTER) * 0.985;
+
+            // gentle pull to center box
+            const tx = cx + clamp(a.x - cx, -idleBoxW/2, idleBoxW/2);
+            const ty = cy + clamp(a.y - cy, -idleBoxH/2, idleBoxH/2);
+            a.vx += (tx - a.x) * 0.0009;
+            a.vy += (ty - a.y) * 0.0009;
+
+          } else if (state === STATE.POST_RED_EXPLOSION){
+            a.vx = a.vx * 0.992 + (Math.random()-0.5)*IDLE_JITTER*0.20;
+            a.vy = a.vy * 0.992 + (Math.random()-0.5)*IDLE_JITTER*0.20;
+
+          } else if (state === STATE.RECOVER_RED){
+            a.vx = a.vx * 0.93 + (Math.random()-0.5)*IDLE_JITTER*0.10;
+            a.vy = a.vy * 0.93 + (Math.random()-0.5)*IDLE_JITTER*0.10;
+
           } else {
-            // odd second → 細い側へ寄る
-            colonScale = 1 - (1 - COLON_THIN_SCALE) * easeOut;
+            // seeking modes
+            if (state === STATE.ENTER_SQUASH_WITH_LAG && nowMs() < a.activeAt){
+              a.vx = a.vx*0.90 + (Math.random()-0.5)*0.60;
+              a.vy = a.vy*0.90 + (Math.random()-0.5)*0.60;
+            } else {
+              const t = transformedTarget(a);
+              const dx = t.x - a.x;
+              const dy = t.y - a.y;
+              a.vx = a.vx*damp + dx*seekK;
+              a.vy = a.vy*damp + dy*seekK;
+            }
+
+            // bounce styles during ENTER
+            if (state === STATE.ENTER_VERTICAL_BOUNCE){
+              a.vy += 0.18;
+              if (a.y < 0){ a.y = 0; a.vy *= -0.90; }
+              if (a.y > p.height){ a.y = p.height; a.vy *= -0.90; }
+            } else if (state === STATE.ENTER_HORIZONTAL_BOUNCE){
+              a.vx += 0.18;
+              if (a.x < 0){ a.x = 0; a.vx *= -0.90; }
+              if (a.x > p.width){ a.x = p.width; a.vx *= -0.90; }
+            } else if (state === STATE.ENTER_RANDOM_BOUNCE){
+              if (a.x < 0){ a.x = 0; a.vx *= -0.90; }
+              if (a.x > p.width){ a.x = p.width; a.vx *= -0.90; }
+              if (a.y < 0){ a.y = 0; a.vy *= -0.90; }
+              if (a.y > p.height){ a.y = p.height; a.vy *= -0.90; }
+            }
+          }
+
+          a.x += a.vx;
+          a.y += a.vy;
+
+          // hard bounds
+          if (a.x < 0){ a.x = 0; a.vx *= -0.5; }
+          if (a.x > p.width){ a.x = p.width; a.vx *= -0.5; }
+          if (a.y < 0){ a.y = 0; a.vy *= -0.5; }
+          if (a.y > p.height){ a.y = p.height; a.vy *= -0.5; }
+        }
+      }
+
+      // ---- main loop ----
+      let _debugBound = false;
+      p.setup = ()=>{
+        const c = p.createCanvas(16, 9);
+        if (holder) c.parent(holder);
+        p.pixelDensity(Math.min(window.devicePixelRatio||1,2));
+        p.frameRate(60);
+
+        updateBlobParams();
+        ensureTextBuffer();
+        rebuildTargets();
+
+        // init positions random
+        for (let i=0;i<N;i++){
+          pts[i].x = Math.random()*p.width;
+          pts[i].y = Math.random()*p.height;
+        }
+
+        startIdle();
+
+        if (!_debugBound){
+          bindDebugUIOnce();
+          _debugBound = true;
+        }
+      };
+
+      function resizeAll(){
+        p.resizeCanvas(window.innerWidth || DESIGN_W, window.innerHeight || DESIGN_H);
+        updateBlobParams();
+        ensureTextBuffer();
+        rebuildTargets();
+      }
+
+      p.windowResized = ()=>{ resizeAll(); };
+
+      p.draw = ()=>{
+        const now = nowMs();
+        if (cam.enabled && (p.frameCount % 6 === 0)) runDetection(now);
+
+        updateHasFaceAndFaceParams(now);
+
+        // 4秒ルール用
+        if (prevHasFace && !hasFace){
+          lastFaceLostAt = now;
+        }
+
+        // time change rebuild while showing/entering
+        if (state !== STATE.IDLE_SABORU && state !== STATE.POST_FADE_OUT_INVISIBLE){
+          const hm = clockHM();
+          if (hm !== lastHM) rebuildTargets();
+        }
+
+        // ---- State machine ----
+        const elapsed = now - stateStartedAt;
+        const dur = stateData.dur || 1;
+        const t = clamp(elapsed / dur, 0, 1);
+
+        // default transforms
+        squashX = squashY = 1.0;
+
+        if (state === STATE.IDLE_SABORU){
+          if (hasFace){
+            const dt = now - lastFaceLostAt;
+            if (dt < 4000){
+              startEnterQuickSquash();
+            } else {
+              startEnterRandom5();
+            }
           }
         }
 
-        const colonR = r * colonScale;
-        const colonAlpha = BASE_ALPHA;
-
-        const OUTLINE_SCALE = 1.55;
-        // 小さい画面ではアウトライン加算を少し弱めて「太り」を抑える
-        const sEff = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
-        const OUTLINE_ALPHA = BASE_ALPHA * 0.40 * Math.min(1.0, Math.max(0.65, sEff));
-
-        // 画面サイズに応じて密度を調整（小さい画面ほど間引いて真っ白にならないようにする）
-        const BASE_AREA = DESIGN_W * DESIGN_H;
-        const area = Math.max(1, p.width * p.height);
-        let densityScale = 1.0;
-        if (area < BASE_AREA){
-          const tArea = BASE_AREA / area;
-          const AREA_DENSITY_POW = 0.7; // 調整用：0.5〜1.0くらいで好みを探る
-          densityScale = Math.min(3.0, Math.pow(tArea, AREA_DENSITY_POW)); // 1〜約3倍まで
+        else if (
+          state === STATE.ENTER_QUICK_SQUASH ||
+          state === STATE.ENTER_VERTICAL_BOUNCE ||
+          state === STATE.ENTER_HORIZONTAL_BOUNCE ||
+          state === STATE.ENTER_RANDOM_BOUNCE ||
+          state === STATE.ENTER_EDGE_SQUASH ||
+          state === STATE.ENTER_SQUASH_WITH_LAG
+        ){
+          if (!hasFace){
+            startIdle();
+          } else {
+            // squash on first part
+            const k = easeOutQuint(clamp(elapsed/380, 0, 1));
+            squashX = lerp(0.72, 1.0, k);
+            squashY = lerp(1.30, 1.0, k);
+            if (t >= 1) startShow();
+          }
         }
 
-        // サンプリングの目標数（B_*）に densityScale を掛けることで、小さい画面では粒を間引く
-        const B_H_BASE = 1400, B_M_BASE = 1400, B_S_BASE = 120, B_C_BASE = 90;
-        const B_H = B_H_BASE * densityScale;
-        const B_M = B_M_BASE * densityScale;
-        const B_S = B_S_BASE * densityScale;
-        const B_C = B_C_BASE * densityScale;
-
-        const sH = Math.max(1, Math.floor(HN / B_H));
-        const sM = Math.max(1, Math.floor(MN / B_M));
-        const sS = Math.max(1, Math.floor(Math.max(1,SN) / B_S));
-        const sC = Math.max(1, Math.floor(CN / B_C));
-
-        for (let i=0;i<HN;i+=sH){ const a=pts[i]; gBlob.fill(colR, colG, colB, alphaEff); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
-        for (let i=HN;i<HN+MN;i+=sM){ const a=pts[i]; gBlob.fill(colR, colG, colB, alphaEff); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
-        for (let i=HN+MN;i<HN+MN+SN;i+=sS){ const a=pts[i]; gBlob.fill(colR, colG, colB, alphaEff); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
-        for (let i=HN+MN+SN;i<N;i+=sC){ const a=pts[i]; gBlob.fill(colR, colG, colB, colonAlpha * Math.max(0.0, Math.min(1.0, slimeAlpha01))); gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2); }
-        
-        // Extra wide, faint pass just for H & M to smooth their outlines
-        for (let i=0;i<HN;i+=sH){
-          const a = pts[i];
-          gBlob.fill(colR, colG, colB, OUTLINE_ALPHA * Math.max(0.0, Math.min(1.0, slimeAlpha01)));
-          gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
-        }
-        for (let i=HN;i<HN+MN;i+=sM){
-          const a = pts[i];
-          gBlob.fill(colR, colG, colB, OUTLINE_ALPHA * Math.max(0.0, Math.min(1.0, slimeAlpha01)));
-          gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
+        else if (state === STATE.SHOW_TIME){
+          if (!hasFace){
+            startIdle();
+          } else {
+            if (elapsed >= 3000){
+              startExitRandom3();
+            }
+          }
         }
 
-        const gr = Math.max(2, Math.floor(GUIDE_RADIUS));
-        const GUIDE_STRIDE = 4, GUIDE_ALPHA = 8;
-        gBlob.fill(255, GUIDE_ALPHA);
-        for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){ const t=guides[gi]; gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2); }
-
-        gBlob.pop();
-        try { gBlob.filter(p.BLUR, BLUR_AMOUNT); } catch(e){}
-        try { gBlob.filter(p.THRESHOLD, THRESH_LEVEL); } catch(e){ gBlob.filter(p.THRESHOLD); }
-        p.image(gBlob, 0, 0, p.width, p.height);
-      }
-
-
-      p.draw = function(){
-  frames++;
-  const now = performance.now();
-  const dt = Math.min(50, now - prevNowMs); // clamp
-  prevNowMs = now;
-
-  // FPS
-  if (now-lastFPSTime>=500){
-    lastFPS=Math.round(frames*1000/(now-lastFPSTime));
-    frames=0; lastFPSTime=now;
-  }
-
-  // ---- Camera detection ----
-  if (cam.enabled && (p.frameCount%DETECT_EVERY_N_FRAMES===0)) runDetection(now);
-  const camSeen = cam.enabled ? (now-cam.lastSeenAt<=SEEN_DEBOUNCE_MS) : false;
-
-  // ---- Debug / Simulation inputs ----
-  const useSimEl = document.getElementById('useSim');
-  const useSim = useSimEl ? !!useSimEl.checked : true;
-
-  const simHasFaceEl = document.getElementById('simHasFace');
-  const simHasFace = simHasFaceEl ? !!simHasFaceEl.checked : true;
-
-  const simFaceXEl = document.getElementById('simFaceX');
-  const simFaceYEl = document.getElementById('simFaceY');
-  const simFaceDistEl = document.getElementById('simFaceDist');
-
-  let faceX01 = 0.5, faceY01 = 0.5, faceClose01 = 0.5; // 0=遠い, 1=近い
-
-  if (useSim){
-    faceX01 = simFaceXEl ? (Number(simFaceXEl.value)/100) : 0.5;
-    faceY01 = simFaceYEl ? (Number(simFaceYEl.value)/100) : 0.5;
-    faceClose01 = simFaceDistEl ? (Number(simFaceDistEl.value)/100) : 0.5;
-  } else if (cam.enabled && cam.face && cam.face.vw && cam.face.vh){
-    // FaceDetector: bbox -> 正規化（X はミラー補正）
-    const bb = cam.face;
-    const cx = bb.x + bb.w * 0.5;
-    const cy = bb.y + bb.h * 0.5;
-    const nx = cx / bb.vw;
-    const ny = cy / bb.vh;
-
-    faceX01 = 1.0 - nx; // mirror
-    faceY01 = ny;
-
-    const area01 = (bb.w * bb.h) / (bb.vw * bb.vh); // 0..1
-    // ざっくり距離化（環境差ありなのでゆるく）
-    const close = (area01 - 0.02) / 0.18; // 0.02〜0.20 を 0..1 に
-    faceClose01 = Math.max(0, Math.min(1, close));
-  }
-
-  const hasFace = useSim ? simHasFace : camSeen;
-        seen = hasFace; // keep legacy var for drawSlime
-
-
-  // Smoothly blend visual parameters to prevent sudden thickness jump
-  {
-    const target = hasFace ? 1.0 : 0.0;
-    const k = (target > seenVis01) ? SEEN_VIS_LERP_IN : SEEN_VIS_LERP_OUT;
-    seenVis01 = seenVis01 + (target - seenVis01) * k;
-    if (seenVis01 < 0) seenVis01 = 0;
-    if (seenVis01 > 1) seenVis01 = 1;
-  }
-
-  // Face-lost timestamp (4秒ルール)
-  if (prevSeen && !hasFace){
-    lastFaceLostAt = now;
-  }
-  prevSeen = hasFace;
-
-  // ---- State helpers ----
-  function setState(next, data){
-    state = next;
-    stateStartedAt = now;
-    stateData = data || {};
-  }
-
-  function gatherToCenter(spread){
-    const cx = CLOCK_CX, cy = CLOCK_CY;
-    const s = spread || 22;
-    for (let i=0;i<N;i++){
-      const a = pts[i];
-      a.x = cx + (Math.random()-0.5)*s*2;
-      a.y = cy + (Math.random()-0.5)*s*2;
-      a.vx = (Math.random()-0.5)*0.6;
-      a.vy = (Math.random()-0.5)*0.6;
-      a.ax = a.x; a.ay = a.y;
-      a.activeAt = 0;
-      a.catchUntil = 0;
-    }
-  }
-
-  function applyExplosionImpulse(){
-    const cx = CLOCK_CX, cy = CLOCK_CY;
-    for (let i=0;i<N;i++){
-      const a = pts[i];
-      const dx = a.x - cx;
-      const dy = a.y - cy;
-      const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-      const nx = dx / dist;
-      const ny = dy / dist;
-      const speed = EXPLOSION_SPEED_MIN + Math.random() * (EXPLOSION_SPEED_MAX - EXPLOSION_SPEED_MIN);
-      a.vx = nx * speed;
-      a.vy = ny * speed;
-      a.activeAt = 0;
-      a.catchUntil = 0;
-    }
-  }
-
-  function pickEnter(){
-    const r = Math.floor(Math.random() * 5);
-    if (r===0) return STATE.ENTER_VERTICAL_BOUNCE;
-    if (r===1) return STATE.ENTER_HORIZONTAL_BOUNCE;
-    if (r===2) return STATE.ENTER_RANDOM_BOUNCE;
-    if (r===3) return STATE.ENTER_EDGE_SQUASH;
-    return STATE.ENTER_SQUASH_WITH_LAG;
-  }
-  function pickExit(){
-    const r = Math.floor(Math.random() * 3);
-    if (r===0) return STATE.EXIT_RED_EXPLOSION;
-    if (r===1) return STATE.EXIT_FADE_OUT;
-    return STATE.EXIT_ZOOM_OUT_TRACKING;
-  }
-
-  function startIdle(){
-    // サボり状態：白・表示
-    slimeHeat01 = 0.0;
-    slimeAlpha01 = 1.0;
-    colonBlinkSpeed = 1.0;
-    clockScale = 1.0;
-    clockOffX = 0.0;
-    clockOffY = 0.0;
-    setState(STATE.IDLE_SABORU);
-  }
-
-  function startShow(){
-    slimeHeat01 = 0.0;
-    slimeAlpha01 = 1.0;
-    colonBlinkSpeed = 1.0;
-    clockScale = 1.0;
-    clockOffX = 0.0;
-    clockOffY = 0.0;
-    setState(STATE.SHOW_TIME);
-  }
-
-  function startEnter(type){
-    // ターゲットを最新の時刻に
-    const nowStr = clockString();
-    if (nowStr !== lastTimeStr) rebuildTargets();
-
-    if (type === STATE.ENTER_EDGE_SQUASH){
-      const side = Math.floor(Math.random()*4); // 0:top 1:bottom 2:left 3:right
-      const pad = 30;
-      for (let i=0;i<N;i++){
-        const a = pts[i];
-        if (side===0){ a.x = Math.random()*p.width; a.y = -pad; }
-        else if (side===1){ a.x = Math.random()*p.width; a.y = p.height + pad; }
-        else if (side===2){ a.x = -pad; a.y = Math.random()*p.height; }
-        else { a.x = p.width + pad; a.y = Math.random()*p.height; }
-        const dx = CLOCK_CX - a.x, dy = CLOCK_CY - a.y;
-        a.vx = dx * 0.002 + (Math.random()-0.5)*0.6;
-        a.vy = dy * 0.002 + (Math.random()-0.5)*0.6;
-        a.ax = a.x; a.ay = a.y;
-        a.activeAt = 0;
-        a.catchUntil = 0;
-      }
-      setState(STATE.ENTER_EDGE_SQUASH, { side });
-      return;
-    }
-
-    // それ以外は「一瞬で集まる」
-    gatherToCenter(24);
-
-    if (type === STATE.ENTER_VERTICAL_BOUNCE){
-      for (let i=0;i<N;i++){
-        const a = pts[i];
-        a.vx = (Math.random()-0.5) * 2.2;
-        a.vy = (Math.random()*2-1) * 16.0;
-      }
-    } else if (type === STATE.ENTER_HORIZONTAL_BOUNCE){
-      for (let i=0;i<N;i++){
-        const a = pts[i];
-        a.vx = (Math.random()*2-1) * 16.0;
-        a.vy = (Math.random()-0.5) * 2.2;
-      }
-    } else if (type === STATE.ENTER_RANDOM_BOUNCE){
-      for (let i=0;i<N;i++){
-        const a = pts[i];
-        const ang = Math.random()*Math.PI*2;
-        const sp = 10 + Math.random()*10;
-        a.vx = Math.cos(ang)*sp;
-        a.vy = Math.sin(ang)*sp;
-      }
-    } else if (type === STATE.ENTER_SQUASH_WITH_LAG){
-      // 少し遅れる粒をセット
-      scheduleLagCluster(now, 350, 850, 0.045);
-    }
-
-    setState(type, {});
-  }
-
-  function startQuickReturn(){
-    // 4秒未満復帰：スク&スト → SHOW
-    const nowStr = clockString();
-    if (nowStr !== lastTimeStr) rebuildTargets();
-    gatherToCenter(18);
-    setState(STATE.ENTER_QUICK_SQUASH, {});
-  }
-
-  function startExit(type){
-    if (type === STATE.EXIT_RED_EXPLOSION){
-      slimeAlpha01 = 1.0;
-      slimeHeat01 = 0.0;
-      colonBlinkSpeed = 1.0;
-      setState(STATE.EXIT_RED_EXPLOSION, {});
-      return;
-    }
-    if (type === STATE.EXIT_FADE_OUT){
-      slimeAlpha01 = 1.0;
-      slimeHeat01 = 0.0;
-      colonBlinkSpeed = 1.0;
-      setState(STATE.EXIT_FADE_OUT, {});
-      return;
-    }
-    if (type === STATE.EXIT_ZOOM_OUT_TRACKING){
-      slimeAlpha01 = 1.0;
-      slimeHeat01 = 0.0;
-      colonBlinkSpeed = 1.0;
-      setState(STATE.EXIT_ZOOM_OUT_TRACKING, { baseScale: clockScale });
-      return;
-    }
-  }
-
-  function startRecoverFromPost(){
-    if (state === STATE.POST_RED_EXPLOSION || state === STATE.EXIT_RED_EXPLOSION){
-      setState(STATE.RECOVER_RED, {});
-      return;
-    }
-    if (state === STATE.POST_FADE_OUT_INVISIBLE || state === STATE.EXIT_FADE_OUT){
-      setState(STATE.RECOVER_FADE, {});
-      return;
-    }
-    if (state === STATE.POST_ZOOM_OUT_TRACKING || state === STATE.EXIT_ZOOM_OUT_TRACKING){
-      // 現在の追従値を保持
-      setState(STATE.RECOVER_ZOOM, { holdScale: clockScale, holdX: clockOffX, holdY: clockOffY });
-      return;
-    }
-    // default
-    startIdle();
-  }
-
-  // ---- Debug buttons wiring (once) ----
-  if (!window.__cc_v020_dbgWired){
-    window.__cc_v020_dbgWired = true;
-
-    const el = (id)=>document.getElementById(id);
-
-    const goIdle = el('dbgGoIdle');
-    if (goIdle) goIdle.onclick = ()=>{ startIdle(); };
-
-    const goShow = el('dbgGoShow');
-    if (goShow) goShow.onclick = ()=>{ startShow(); };
-
-    const cont = el('dbgContinue');
-    if (cont) cont.onclick = ()=>{
-      // 続き復帰ルートを強制
-      lastFaceLostAt = performance.now() - 1000;
-      startQuickReturn();
-    };
-
-    const newSess = el('dbgNewSession');
-    if (newSess) newSess.onclick = ()=>{
-      lastFaceLostAt = performance.now() - 5000;
-      startEnter(pickEnter());
-    };
-
-    const enterGo = el('dbgEnterGo');
-    if (enterGo) enterGo.onclick = ()=>{
-      const sel = el('dbgEnterSel');
-      const v = sel ? sel.value : 'RANDOM';
-      lastFaceLostAt = performance.now() - 5000;
-      startEnter(v==='RANDOM' ? pickEnter() : v);
-    };
-
-    const exitGo = el('dbgExitGo');
-    if (exitGo) exitGo.onclick = ()=>{
-      const sel = el('dbgExitSel');
-      const v = sel ? sel.value : 'RANDOM';
-      startExit(v==='RANDOM' ? pickExit() : v);
-    };
-  }
-
-  // ---- State transitions (time rules) ----
-  if (state === STATE.IDLE_SABORU){
-    if (hasFace){
-      const dtLost = (lastFaceLostAt === null) ? 999999 : (now - lastFaceLostAt);
-      if (dtLost < 4000){
-        startQuickReturn();
-      } else {
-        startEnter(pickEnter());
-      }
-    }
-  } else if (state.startsWith('ENTER')){
-    if (!hasFace){
-      startIdle();
-    }
-  } else if (state === STATE.SHOW_TIME){
-    if (!hasFace){
-      startIdle();
-    } else {
-      // 3秒ルール（見続けられたらEXIT）
-      if ((now - stateStartedAt) >= 3000){
-        startExit(pickExit());
-      }
-    }
-  } else if (state.startsWith('EXIT')){
-    if (!hasFace){
-      startRecoverFromPost();
-    }
-  } else if (state.startsWith('POST')){
-    if (!hasFace){
-      startRecoverFromPost();
-    }
-  } else if (state.startsWith('RECOVER')){
-    // 戻り中に見られたら、4秒ルールで復帰判定
-    if (hasFace){
-      const dtLost = (lastFaceLostAt === null) ? 999999 : (now - lastFaceLostAt);
-      if (dtLost < 4000){
-        startQuickReturn();
-      } else {
-        startEnter(pickEnter());
-      }
-    }
-  }
-
-  // ---- Time target refresh (when digits may be shown) ----
-  const digitsVisible =
-    (state !== STATE.IDLE_SABORU) &&
-    (state !== STATE.POST_RED_EXPLOSION) &&
-    (state !== STATE.POST_FADE_OUT_INVISIBLE);
-
-  if (digitsVisible){
-    const nowStr = clockString();
-    if (nowStr !== lastTimeStr) rebuildTargets();
-  }
-
-  // ---- Per-state parameters (visual + transform) ----
-  let squashX = 1.0, squashY = 1.0;
-  let seekK = SEEK_STRENGTH;
-  let damp = DAMP;
-
-  // defaults
-  clockScale = 1.0;
-  clockOffX = 0.0;
-  clockOffY = 0.0;
-
-  // helper easing
-  const easeOutQuint = (t)=>1 - Math.pow(1 - t, 5);
-  const easeInOut = (t)=> (t<0.5) ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
-
-  if (state === STATE.ENTER_QUICK_SQUASH){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 420));
-    const e = easeOutQuint(t);
-    // いったん縦につぶれて横に伸びる → 戻る
-    const s = Math.sin(Math.PI * e);
-    squashX = 1.0 + 0.35 * s;
-    squashY = 1.0 - 0.28 * s;
-    seekK = SEEK_STRENGTH * (0.10 + 0.90 * e);
-    if (t >= 1){
-      startShow();
-    }
-  }
-
-  if (state === STATE.ENTER_VERTICAL_BOUNCE ||
-      state === STATE.ENTER_HORIZONTAL_BOUNCE ||
-      state === STATE.ENTER_RANDOM_BOUNCE){
-    const total = 2200;
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / total));
-    seekK = SEEK_STRENGTH * (0.05 + 0.95 * t);
-    damp = 0.86;
-
-    if (t >= 1){
-      startShow();
-    }
-  }
-
-  if (state === STATE.ENTER_EDGE_SQUASH){
-    const tAll = now - stateStartedAt;
-    // 0..900ms: 端→中心 / 900..1400ms: squash / 1400..2200ms: settle
-    if (tAll < 900){
-      seekK = SEEK_STRENGTH * 0.06;
-      damp = 0.88;
-    } else if (tAll < 1400){
-      const t = (tAll - 900) / 500;
-      const e = easeOutQuint(Math.max(0, Math.min(1, t)));
-      const s = Math.sin(Math.PI * e);
-      squashX = 1.0 + 0.45 * s;
-      squashY = 1.0 - 0.34 * s;
-      seekK = SEEK_STRENGTH * (0.15 + 0.85 * e);
-      damp = 0.84;
-    } else {
-      const t = Math.max(0, Math.min(1, (tAll - 1400) / 800));
-      seekK = SEEK_STRENGTH * (0.20 + 0.80 * t);
-      damp = 0.83;
-      if (tAll >= 2200){
-        startShow();
-      }
-    }
-  }
-
-  if (state === STATE.ENTER_SQUASH_WITH_LAG){
-    const tAll = now - stateStartedAt;
-    if (tAll < 520){
-      const t = tAll / 520;
-      const e = easeOutQuint(Math.max(0, Math.min(1, t)));
-      const s = Math.sin(Math.PI * e);
-      squashX = 1.0 + 0.55 * s;
-      squashY = 1.0 - 0.40 * s;
-      seekK = SEEK_STRENGTH * (0.12 + 0.88 * e);
-      damp = 0.84;
-    } else {
-      const t = Math.max(0, Math.min(1, (tAll - 520) / 900));
-      seekK = SEEK_STRENGTH * (0.18 + 0.82 * t);
-      damp = 0.83;
-      if (tAll >= 2000){
-        startShow();
-      }
-    }
-  }
-
-  if (state === STATE.SHOW_TIME){
-    slimeHeat01 = 0.0;
-    slimeAlpha01 = 1.0;
-    colonBlinkSpeed = 1.0;
-    seekK = SEEK_STRENGTH;
-    damp = DAMP;
-  }
-
-  if (state === STATE.EXIT_RED_EXPLOSION){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 1600));
-    slimeHeat01 = easeInOut(t);
-    colonBlinkSpeed = 1.0 + 4.0 * t;
-    slimeAlpha01 = 1.0;
-    seekK = SEEK_STRENGTH * 0.7;
-    damp = DAMP;
-
-    if (t >= 1){
-      applyExplosionImpulse();
-      setState(STATE.POST_RED_EXPLOSION, {});
-    }
-  }
-
-  if (state === STATE.POST_RED_EXPLOSION){
-    slimeHeat01 = 1.0;
-    slimeAlpha01 = 1.0;
-    colonBlinkSpeed = 6.0;
-  }
-
-  if (state === STATE.RECOVER_RED){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 1400));
-    slimeHeat01 = 1.0 - t;
-    slimeAlpha01 = 1.0;
-    colonBlinkSpeed = 1.0;
-    if (t >= 1){
-      startIdle();
-    }
-  }
-
-  if (state === STATE.EXIT_FADE_OUT){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 1300));
-    slimeAlpha01 = 1.0 - easeOutQuint(t);
-    slimeHeat01 = 0.0;
-    colonBlinkSpeed = 1.0;
-    seekK = SEEK_STRENGTH * 0.8;
-    damp = DAMP;
-    if (t >= 1){
-      slimeAlpha01 = 0.0;
-      setState(STATE.POST_FADE_OUT_INVISIBLE, {});
-    }
-  }
-
-  if (state === STATE.POST_FADE_OUT_INVISIBLE){
-    slimeAlpha01 = 0.0;
-    slimeHeat01 = 0.0;
-    colonBlinkSpeed = 1.0;
-  }
-
-  if (state === STATE.RECOVER_FADE){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 1400));
-    // 背景からじわ〜っと出る：alpha 0→1
-    slimeAlpha01 = easeOutQuint(t);
-    slimeHeat01 = 0.0;
-    colonBlinkSpeed = 1.0;
-    if (t >= 1){
-      startIdle();
-    }
-  }
-
-  if (state === STATE.EXIT_ZOOM_OUT_TRACKING){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 520));
-    const e = easeOutQuint(t);
-    clockScale = 1.0 + (0.42 - 1.0) * e; // ぎゅん
-    clockOffX = 0.0;
-    clockOffY = 0.0;
-    slimeAlpha01 = 1.0;
-    slimeHeat01 = 0.0;
-    colonBlinkSpeed = 1.0;
-
-    seekK = SEEK_STRENGTH * 0.9;
-    damp = DAMP;
-
-    if (t >= 1){
-      setState(STATE.POST_ZOOM_OUT_TRACKING, { scale: clockScale, offX: 0, offY: 0 });
-    }
-  }
-
-  if (state === STATE.POST_ZOOM_OUT_TRACKING){
-    // 追従：顔の位置に対して「反対」へ逃げる
-    // 距離：近いほど小さく（遠のく）、遠いほど大きく（近づく）
-    const close = Math.max(0, Math.min(1, faceClose01));
-    const fx = Math.max(0, Math.min(1, faceX01));
-    const fy = Math.max(0, Math.min(1, faceY01));
-
-    const targetScale = (0.95 * (1.0 - close)) + (0.26 * close); // far->0.95, close->0.26
-
-    const dx = (fx - 0.5);
-    const dy = (fy - 0.5);
-
-    const targetOffX = -dx * p.width * 0.18;
-    const targetOffY = -dy * p.height * 0.14;
-
-    // smoothing
-    clockScale = clockScale + (targetScale - clockScale) * 0.08;
-    clockOffX  = clockOffX  + (targetOffX  - clockOffX)  * 0.10;
-    clockOffY  = clockOffY  + (targetOffY  - clockOffY)  * 0.10;
-
-    slimeAlpha01 = 1.0;
-    slimeHeat01 = 0.0;
-    colonBlinkSpeed = 1.0;
-
-    seekK = SEEK_STRENGTH * 0.9;
-    damp = DAMP;
-  }
-
-  if (state === STATE.RECOVER_ZOOM){
-    const t = Math.max(0, Math.min(1, (now - stateStartedAt) / 900));
-    // ふわっと消える
-    slimeAlpha01 = 1.0 - easeOutQuint(t);
-    slimeHeat01 = 0.0;
-    colonBlinkSpeed = 1.0;
-
-    // 消える間は、その場（縮小＋オフセット）を保つ
-    clockScale = stateData.holdScale || clockScale;
-    clockOffX  = stateData.holdX || clockOffX;
-    clockOffY  = stateData.holdY || clockOffY;
-
-    if (t >= 1){
-      // そのあとサボり液体が戻る
-      slimeAlpha01 = 1.0;
-      startIdle();
-    }
-  }
-
-  // ---- Background ----
-  p.background(0);
-
-  // ---- Physics step ----
-  const tSec = now * 0.001;
-
-  for (let i=0;i<N;i++){
-    const a = pts[i];
-
-    // common transform target
-    const baseTx = a.tx, baseTy = a.ty;
-
-    const tx = CLOCK_CX + (baseTx - CLOCK_CX) * (clockScale * squashX) + clockOffX;
-    const ty = CLOCK_CY + (baseTy - CLOCK_CY) * (clockScale * squashY) + clockOffY;
-
-    if (state === STATE.IDLE_SABORU){
-      a.vx = (a.vx + (Math.random()-0.5)*IDLE_JITTER) * 0.98;
-      a.vy = (a.vy + (Math.random()-0.5)*IDLE_JITTER) * 0.98;
-
-    } else if (state === STATE.POST_RED_EXPLOSION){
-      // 爆発後：飛び散ったままをゆるく減速
-      a.vx = a.vx * EXPLOSION_DAMP + (Math.random()-0.5)*IDLE_JITTER*EXPLOSION_JITTER_GAIN;
-      a.vy = a.vy * EXPLOSION_DAMP + (Math.random()-0.5)*IDLE_JITTER*EXPLOSION_JITTER_GAIN;
-
-    } else if (state === STATE.RECOVER_RED){
-      // 溶けていく：爆発の勢いを落としてサボりへ寄せる
-      a.vx = a.vx * 0.93 + (Math.random()-0.5)*IDLE_JITTER*0.4;
-      a.vy = a.vy * 0.93 + (Math.random()-0.5)*IDLE_JITTER*0.4;
-
-    } else {
-      // digits-seeking modes
-      // Lag particles (ENTER_SQUASH_WITH_LAG)
-      if (state === STATE.ENTER_SQUASH_WITH_LAG && now < a.activeAt){
-        a.vx = a.vx*0.90 + (Math.random()-0.5)*0.55;
-        a.vy = a.vy*0.90 + (Math.random()-0.5)*0.55;
-      } else {
-        // wobble (SHOW_TIME)
-        let wox = 0, woy = 0;
-        if (state === STATE.SHOW_TIME){
-          const phase = i * 0.37;
-          wox = Math.sin(tSec*(WOBBLE_BASE_HZ + 0.07) + phase) * SEEN_WOBBLE;
-          woy = Math.cos(tSec*(WOBBLE_BASE_HZ + 0.05) + phase) * SEEN_WOBBLE;
+        else if (state === STATE.EXIT_RED_EXPLOSION){
+          if (!hasFace){
+            startIdle();
+          } else {
+            slimeHeat01 = easeInOutCubic(t);
+            colonBlinkSpeed = lerp(1.0, 7.0, easeOutQuint(t));
+            if (t >= 1){
+              slimeHeat01 = 1.0;
+              colonBlinkSpeed = 7.5;
+              triggerExplosion();
+              setState(STATE.POST_RED_EXPLOSION, {});
+            }
+          }
         }
 
-        const dx = (tx + wox) - a.x;
-        const dy = (ty + woy) - a.y;
-        a.vx = a.vx * damp + dx * seekK;
-        a.vy = a.vy * damp + dy * seekK;
-      }
+        else if (state === STATE.POST_RED_EXPLOSION){
+          slimeHeat01 = 1.0;
+          colonBlinkSpeed = 7.5;
+          if (!hasFace){
+            startRecover('RED');
+          }
+        }
 
-      // Bounce behavior during ENTER bounce states
-      if (state === STATE.ENTER_VERTICAL_BOUNCE){
-        // gravity-ish
-        a.vy += 0.18;
-        // reflect top/bottom
-        if (a.y < 0){ a.y = 0; a.vy *= -0.90; }
-        if (a.y > p.height){ a.y = p.height; a.vy *= -0.90; }
-        // mild x boundary
-        if (a.x < 0){ a.x = 0; a.vx *= -0.6; }
-        if (a.x > p.width){ a.x = p.width; a.vx *= -0.6; }
-      } else if (state === STATE.ENTER_HORIZONTAL_BOUNCE){
-        a.vx += 0.18;
-        if (a.x < 0){ a.x = 0; a.vx *= -0.90; }
-        if (a.x > p.width){ a.x = p.width; a.vx *= -0.90; }
-        if (a.y < 0){ a.y = 0; a.vy *= -0.6; }
-        if (a.y > p.height){ a.y = p.height; a.vy *= -0.6; }
-      } else if (state === STATE.ENTER_RANDOM_BOUNCE){
-        if (a.x < 0){ a.x = 0; a.vx *= -0.90; }
-        if (a.x > p.width){ a.x = p.width; a.vx *= -0.90; }
-        if (a.y < 0){ a.y = 0; a.vy *= -0.90; }
-        if (a.y > p.height){ a.y = p.height; a.vy *= -0.90; }
-      } else if (state === STATE.ENTER_EDGE_SQUASH){
-        // Keep within bounds once inside
-        if (a.x < 0){ a.x = 0; a.vx *= -0.6; }
-        if (a.x > p.width){ a.x = p.width; a.vx *= -0.6; }
-        if (a.y < 0){ a.y = 0; a.vy *= -0.6; }
-        if (a.y > p.height){ a.y = p.height; a.vy *= -0.6; }
-      }
-    }
+        else if (state === STATE.RECOVER_RED){
+          const u = easeOutQuint(t);
+          slimeHeat01 = lerp(1.0, 0.0, u);
+          colonBlinkSpeed = lerp(7.5, 1.0, u);
+          if (t >= 1) startIdle();
+        }
 
-    // integrate
-    a.x += a.vx;
-    a.y += a.vy;
+        else if (state === STATE.EXIT_FADE_OUT){
+          if (!hasFace){
+            startIdle();
+          } else {
+            slimeAlpha01 = 1.0 - easeOutQuint(t);
+            if (t >= 1){
+              slimeAlpha01 = 0.0;
+              setState(STATE.POST_FADE_OUT_INVISIBLE, {});
+            }
+          }
+        }
 
-    // hard bounds in general
-    if (a.x < 0){ a.x = 0; a.vx *= -0.5; }
-    if (a.x > p.width){ a.x = p.width; a.vx *= -0.5; }
-    if (a.y < 0){ a.y = 0; a.vy *= -0.5; }
-    if (a.y > p.height){ a.y = p.height; a.vy *= -0.5; }
-  }
+        else if (state === STATE.POST_FADE_OUT_INVISIBLE){
+          slimeAlpha01 = 0.0;
+          if (!hasFace){
+            startRecover('FADE');
+          }
+        }
 
-  // ---- Readout ----
-  const ro = document.getElementById('dbgReadout');
-  if (ro){
-    ro.textContent =
-      'STATE: ' + state +
-      ' | hasFace: ' + (hasFace ? 'true' : 'false') +
-      ' | lastLost: ' + (lastFaceLostAt ? ((now-lastFaceLostAt)/1000).toFixed(2)+'s' : '-') +
-      ' | faceX/Y: ' + faceX01.toFixed(2) + ',' + faceY01.toFixed(2) +
-      ' | close: ' + faceClose01.toFixed(2);
-  }
+        else if (state === STATE.RECOVER_FADE){
+          slimeAlpha01 = easeOutQuint(t);
+          if (t >= 1) startIdle();
+        }
 
-  // ---- SLIME rendering ----
-  drawSlime();
-};
+        else if (state === STATE.EXIT_ZOOM_OUT_TRACKING){
+          if (!hasFace){
+            startIdle();
+          } else {
+            const u = easeOutQuint(t);
+            clockScale = lerp(1.0, 0.52, u);
+            clockOffX *= 0.85;
+            clockOffY *= 0.85;
+            if (t >= 1){
+              setState(STATE.POST_ZOOM_OUT_TRACKING, {});
+            }
+          }
+        }
 
-window.addEventListener('resize', ()=>{ resize(); applyFitScale(); });
+        else if (state === STATE.POST_ZOOM_OUT_TRACKING){
+          if (hasFace){
+            updateTransformsForZoomGag();
+          } else {
+            slimeAlpha01 = lerp(slimeAlpha01, 0.0, 0.10);
+            if (slimeAlpha01 <= 0.02){
+              slimeAlpha01 = 0.0;
+              startRecover('ZOOM');
+            }
+          }
+        }
+
+        else if (state === STATE.RECOVER_ZOOM){
+          // reset scale & offsets and bring slime back to idle
+          const u = easeOutQuint(t);
+          clockScale = lerp(clockScale, 1.0, 0.12);
+          clockOffX *= 0.85;
+          clockOffY *= 0.85;
+          slimeAlpha01 = lerp(0.0, 1.0, u);
+          if (t >= 1) startIdle();
+        }
+
+        // ---- physics params ----
+        let seekK = SEEK_BASE;
+        let damp = DAMP_BASE;
+        if (state === STATE.IDLE_SABORU){
+          seekK = 0.0;
+          damp = 0.98;
+        } else if (
+          state === STATE.POST_RED_EXPLOSION ||
+          state === STATE.RECOVER_RED
+        ){
+          seekK = 0.0;
+          damp = 0.985;
+        } else if (state === STATE.ENTER_VERTICAL_BOUNCE || state === STATE.ENTER_HORIZONTAL_BOUNCE || state === STATE.ENTER_RANDOM_BOUNCE || state === STATE.ENTER_EDGE_SQUASH){
+          // ramp seek while bouncing
+          const u = clamp((now - stateStartedAt)/stateData.dur, 0, 1);
+          seekK = lerp(0.010, SEEK_BASE, u);
+          damp = lerp(0.90, DAMP_BASE, u);
+        }
+
+        // ---- draw ----
+        p.background(0);
+        stepParticles(seekK, damp);
+        renderSlime();
+
+        // ---- readout ----
+        if (dbgReadout){
+          dbgReadout.textContent =
+            'STATE: ' + state +
+            ' | hasFace: ' + (hasFace ? 'true' : 'false') +
+            ' | lastLost: ' + ((now - lastFaceLostAt)/1000).toFixed(2) + 's' +
+            ' | faceX/Y: ' + faceX01.toFixed(2) + ',' + faceY01.toFixed(2) +
+            ' | close: ' + faceClose01.toFixed(2);
+        }
+
+        prevHasFace = hasFace;
+      };
     };
+
+    // Font load helps target building; rebuild once fonts are ready
+    const waitFonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
+    waitFonts.then(()=>{ /* p5 will build targets on its own each state; no-op */ });
+
     new p5(sketch);
   }
-  if (document.readyState==='loading'){ window.addEventListener('DOMContentLoaded', boot); } else { boot(); }
+
+  if (document.readyState === 'loading'){
+    window.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
