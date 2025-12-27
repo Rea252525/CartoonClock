@@ -2,7 +2,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.0';
+    const VERSION = 'v0.2.1';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -180,6 +180,33 @@
       const togglePreview = document.getElementById('togglePreview');
       const btnSettings = document.getElementById('btnSettings');
       const settingsPanel = document.getElementById('settings-panel');
+      // Test UI (v0.2.1)
+      const btnTest = document.getElementById('btnTest');
+      const testPanel = document.getElementById('test-panel');
+      const testStateEl = document.getElementById('testState');
+      const testReadoutEl = document.getElementById('testReadout');
+
+      const tEnterV = document.getElementById('tEnterV');
+      const tEnterH = document.getElementById('tEnterH');
+      const tEnterR = document.getElementById('tEnterR');
+
+      const tExitRed  = document.getElementById('tExitRed');
+      const tExitFade = document.getElementById('tExitFade');
+      const tExitZoom = document.getElementById('tExitZoom');
+
+      const tIdle = document.getElementById('tIdle');
+      const tDisplay = document.getElementById('tDisplay');
+      const tRebuild = document.getElementById('tRebuild');
+
+      const tSeenOn = document.getElementById('tSeenOn');
+      const tSeenOff = document.getElementById('tSeenOff');
+      const tAutoExit = document.getElementById('tAutoExit');
+
+      let autoExitEnabled = true;
+      let testPanelVisible = false;
+      let _testUI_last = 0;
+
+
 
       // (debug-ish) mouse as "face" when no camera
       let simFace = {xN:0.5, yN:0.5};
@@ -218,6 +245,117 @@
           updateDiag('診断: シミュレーション ON');
         });
       }
+      // ---------- Test panel wiring ----------
+      function setTestPanelVisible(v){
+        testPanelVisible = !!v;
+        if (testPanel) testPanel.style.display = testPanelVisible ? 'block' : 'none';
+      }
+
+      function forceSimulationMode(){
+        // Make tests deterministic: stop camera-driven seen and use simSeen instead
+        cam.enabled = false;
+        if (cam.wrap) cam.wrap.style.display = 'none';
+        if (togglePreview){
+          togglePreview.checked = false;
+          cam.preview = false;
+        }
+      }
+
+      function setSimSeen(v){
+        simSeen = !!v;
+        if (fakeSeen) fakeSeen.checked = simSeen;
+      }
+
+      if (tAutoExit){
+        autoExitEnabled = tAutoExit.checked;
+        tAutoExit.addEventListener('change', ()=>{ autoExitEnabled = tAutoExit.checked; });
+      }
+
+      if (btnTest){
+        btnTest.addEventListener('click', ()=>{
+          setTestPanelVisible(!testPanelVisible);
+        });
+      }
+
+      // Buttons
+      function nowMs(){ return performance.now(); }
+
+      if (tEnterV) tEnterV.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        startEnter(nowMs(), ENTER_VERTICAL_BOUNCE);
+      });
+      if (tEnterH) tEnterH.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        startEnter(nowMs(), ENTER_HORIZONTAL_BOUNCE);
+      });
+      if (tEnterR) tEnterR.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        startEnter(nowMs(), ENTER_RANDOM_BOUNCE);
+      });
+
+      if (tExitRed) tExitRed.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        startExit(nowMs(), EXIT_RED_EXPLODE);
+      });
+      if (tExitFade) tExitFade.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        startExit(nowMs(), EXIT_FADE_OUT);
+      });
+      if (tExitZoom) tExitZoom.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        startExit(nowMs(), EXIT_ZOOM_OUT_TRACKING);
+      });
+
+      if (tIdle) tIdle.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(false);
+        forceIdle(nowMs());
+      });
+      if (tDisplay) tDisplay.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+        snapToDisplay(nowMs());
+      });
+      if (tRebuild) tRebuild.addEventListener('click', ()=>{
+        rebuildTargets();
+      });
+
+      if (tSeenOn) tSeenOn.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(true);
+      });
+      if (tSeenOff) tSeenOff.addEventListener('click', ()=>{
+        forceSimulationMode(); setSimSeen(false);
+      });
+
+      // Keyboard shortcuts
+      window.addEventListener('keydown', (e)=>{
+        const k = (e.key || '').toLowerCase();
+        if (k === 't'){ setTestPanelVisible(!testPanelVisible); }
+        if (k === '1'){ forceSimulationMode(); setSimSeen(true); startEnter(nowMs(), ENTER_VERTICAL_BOUNCE); }
+        if (k === '2'){ forceSimulationMode(); setSimSeen(true); startEnter(nowMs(), ENTER_HORIZONTAL_BOUNCE); }
+        if (k === '3'){ forceSimulationMode(); setSimSeen(true); startEnter(nowMs(), ENTER_RANDOM_BOUNCE); }
+        if (k === '4'){ forceSimulationMode(); setSimSeen(true); startExit(nowMs(), EXIT_RED_EXPLODE); }
+        if (k === '5'){ forceSimulationMode(); setSimSeen(true); startExit(nowMs(), EXIT_FADE_OUT); }
+        if (k === '6'){ forceSimulationMode(); setSimSeen(true); startExit(nowMs(), EXIT_ZOOM_OUT_TRACKING); }
+        if (k === 'i'){ forceSimulationMode(); setSimSeen(false); forceIdle(nowMs()); }
+        if (k === 'd'){ forceSimulationMode(); setSimSeen(true); snapToDisplay(nowMs()); }
+        if (k === 'r'){ rebuildTargets(); }
+        if (k === 's'){ forceSimulationMode(); setSimSeen(!simSeen); }
+      }, {passive:true});
+
+      // Expose tiny API for console debugging (optional)
+      window.__saboclock = {
+        enterV: ()=>startEnter(nowMs(), ENTER_VERTICAL_BOUNCE),
+        enterH: ()=>startEnter(nowMs(), ENTER_HORIZONTAL_BOUNCE),
+        enterR: ()=>startEnter(nowMs(), ENTER_RANDOM_BOUNCE),
+        exitRed: ()=>startExit(nowMs(), EXIT_RED_EXPLODE),
+        exitFade: ()=>startExit(nowMs(), EXIT_FADE_OUT),
+        exitZoom: ()=>startExit(nowMs(), EXIT_ZOOM_OUT_TRACKING),
+        idle: ()=>forceIdle(nowMs()),
+        display: ()=>snapToDisplay(nowMs()),
+        setSeen: (v)=>{ forceSimulationMode(); setSimSeen(!!v); },
+        setAutoExit: (v)=>{ autoExitEnabled = !!v; if (tAutoExit) tAutoExit.checked = autoExitEnabled; }
+      };
+
+
 
       if (togglePreview){
         togglePreview.checked = false;
@@ -596,12 +734,12 @@
         }
       }
 
-      function startEnter(now){
+      function startEnter(now, forcedType){
         // build the current HM targets once
         rebuildTargets();
 
         // pick pattern
-        const type = ENTER_PATTERNS[Math.floor(Math.random() * ENTER_PATTERNS.length)];
+        const type = forcedType || ENTER_PATTERNS[Math.floor(Math.random() * ENTER_PATTERNS.length)];
         enterState = { type, start: now };
         mode = MODE_ENTER;
         exitState = null;
@@ -642,8 +780,8 @@
         clockTransform.colonSpeed = 1;
       }
 
-      function startExit(now){
-        const type = EXIT_PATTERNS[Math.floor(Math.random() * EXIT_PATTERNS.length)];
+      function startExit(now, forcedType){
+        const type = forcedType || EXIT_PATTERNS[Math.floor(Math.random() * EXIT_PATTERNS.length)];
         exitState = { type, start: now, phase: 'start', exploded:false };
         mode = MODE_EXIT;
         enterState = null;
@@ -656,7 +794,56 @@
         // heat is eased in update loop
       }
 
-      // ---------- Explosion impulse ----------
+      
+      // ---------- Test helpers ----------
+      function forceIdle(now){
+        mode = MODE_IDLE;
+        enterState = null;
+        exitState = null;
+        displayStart = 0;
+        cooldownUntil = 0;
+
+        // push particles a bit so slack is obvious
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+          a.vx += (Math.random()-0.5) * IDLE_JITTER * 6.0;
+          a.vy += (Math.random()-0.5) * IDLE_JITTER * 6.0;
+        }
+
+        clockTransform.scale = 1;
+        clockTransform.offsetX = 0;
+        clockTransform.offsetY = 0;
+        clockTransform.alpha = 1;
+        clockTransform.heat01 = 0;
+        clockTransform.colonSpeed = 1;
+      }
+
+      function snapToDisplay(now){
+        rebuildTargets();
+        mode = MODE_DISPLAY;
+        enterState = null;
+        exitState = null;
+        displayStart = now;
+        cooldownUntil = 0;
+
+        // snap to targets (with current transform = neutral)
+        clockTransform.scale = 1;
+        clockTransform.offsetX = 0;
+        clockTransform.offsetY = 0;
+        clockTransform.alpha = 1;
+        clockTransform.heat01 = 0;
+        clockTransform.colonSpeed = 1;
+
+        for (let i=0;i<N;i++){
+          const a = pts[i];
+          const tp = transformTarget(a.tx, a.ty);
+          a.x = tp.x; a.y = tp.y;
+          a.vx = 0; a.vy = 0;
+        }
+      }
+
+
+// ---------- Explosion impulse ----------
       function triggerExplosion(){
         const cx = clockCenter.x;
         const cy = clockCenter.y;
@@ -890,7 +1077,7 @@
 
         if (mode === MODE_DISPLAY){
           // After stable for 3s: trigger a random EXIT pattern
-          if (rawSeen && displayStart && (now - displayStart >= EXIT_STABLE_TRIGGER_MS)){
+          if (autoExitEnabled && rawSeen && displayStart && (now - displayStart >= EXIT_STABLE_TRIGGER_MS)){
             startExit(now);
           }
 
@@ -1127,7 +1314,33 @@
         }
 
         // Render
-        drawSlime(now);
+        
+        // ---------- Test UI readout ----------
+        if (testStateEl || testReadoutEl){
+          if (now - _testUI_last > 100){
+            _testUI_last = now;
+            try {
+              const eType = enterState ? enterState.type : '-';
+              const xType = exitState ? exitState.type : '-';
+              if (testStateEl){
+                testStateEl.textContent = `mode=${mode}  enter=${eType}  exit=${xType}`;
+              }
+              if (testReadoutEl){
+                const seenTxt = (cam.enabled ? 'cam' : 'sim') + ':' + ( (cam.enabled ? (now - cam.lastSeenAt <= SEEN_DEBOUNCE_MS) : simSeen) ? 'ON' : 'OFF');
+                const stable = (mode === MODE_DISPLAY && displayStart) ? Math.max(0, (now - displayStart)|0) : 0;
+                const cd = Math.max(0, (cooldownUntil - now)|0);
+                const face = cam.enabled ? cam.face : simFace;
+                const faceTxt = `face=(${(face.xN||0).toFixed(2)}, ${(face.yN||0).toFixed(2)})`;
+                testReadoutEl.textContent =
+`seen=${seenTxt}  autoExit=${autoExitEnabled ? 'ON' : 'OFF'}
+displayStableMs=${stable}  cooldownMs=${cd}
+${faceTxt}`;
+              }
+            } catch(err){}
+          }
+        }
+
+drawSlime(now);
       };
 
       window.addEventListener('resize', ()=>{ resize(); applyFitScale(); });
