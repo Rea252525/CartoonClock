@@ -2,6 +2,9 @@
 (function(){
   'use strict';
   function boot(){
+    const VERSION = 'v0.1.17';
+    console.log('[Saboclock]', VERSION);
+
     // ---------------- Config ----------------
     const DPR = Math.min(window.devicePixelRatio || 1, 2);
     const DESIGN_W = 1920;
@@ -111,14 +114,14 @@
     const BLUR_BASE = 2.5;
     const THRESH_BASE = 0.70;
 
-    // --- Appearance tuning (v0.1.16) ---
+    // --- Appearance tuning (v0.1.17) ---
     // Make GitHub Pages and local rendering closer.
     const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
-    const UNSEEN_VIS_THICK_MULT = 1.35;    // thickness multiplier when unseen
-    const UNSEEN_THR_BIAS = -0.09;         // lower threshold when unseen
+    const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT; // keep same to avoid thickness jump    // thickness multiplier when unseen
+    const UNSEEN_THR_BIAS = -0.12;         // lower threshold when unseen (helps blobs survive)         // lower threshold when unseen
 
     const BASE_ALPHA_SEEN = 26;            // ink amount when seen
-    const BASE_ALPHA_UNSEEN = 34;          // ink amount when unseen
+    const BASE_ALPHA_UNSEEN = 38;          // ink amount when unseen          // ink amount when unseen
 
     // --- Responsive runtime params (updated in updateSlimeParams) ---
     let DISC_RADIUS = DISC_RADIUS_BASE;
@@ -341,7 +344,7 @@ function applyFitScale(){
         applyFitScale();
         const waitFonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
         waitFonts.then(()=>{ rebuildTargets(); setTimeout(rebuildTargets, 0); });
-        updateDiag('診断: OK / slime-guided v0.1.16');
+        updateDiag('診断: OK / slime-guided v0.1.17');
       };
 
       function layoutInitial(){
