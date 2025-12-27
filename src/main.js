@@ -111,6 +111,15 @@
     const BLUR_BASE = 2.5;
     const THRESH_BASE = 0.70;
 
+    // --- Appearance tuning (v0.1.15) ---
+    // Make GitHub Pages and local rendering closer.
+    const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
+    const UNSEEN_VIS_THICK_MULT = 1.35;    // thickness multiplier when unseen
+    const UNSEEN_THR_BIAS = -0.09;         // lower threshold when unseen
+
+    const BASE_ALPHA_SEEN = 26;            // ink amount when seen
+    const BASE_ALPHA_UNSEEN = 34;          // ink amount when unseen
+
     // --- Responsive runtime params (updated in updateSlimeParams) ---
     let DISC_RADIUS = DISC_RADIUS_BASE;
     let BLUR_AMOUNT = BLUR_BASE;
@@ -261,8 +270,11 @@
 
         // 基準(1080p付近 / blobScale≈2)での「画面上の半径」をベースに、数字サイズに比例させる
         // 画面上の半径 ≈ DISC_RADIUS(gBlob) * blobScale
-        const baseVisR = DISC_RADIUS_BASE * 2;       // だいたいblobScale=2のときの画面上半径
-        const desiredVisR = baseVisR * s;            // 数字サイズに比例
+        const baseVisR = DISC_RADIUS_BASE * 2;       // approx on-screen radius when blobScale=2
+
+        const visMult = seen ? SEEN_VIS_THICK_MULT : UNSEEN_VIS_THICK_MULT;
+        const desiredVisR = baseVisR * s * visMult; // scale with digit size and state
+
 
         // gBlob上の半径に戻す（blobScaleが上がっても二重に太らないようにする）
         let r = desiredVisR / bs;
@@ -276,7 +288,8 @@
 
         // threshold: 大きいほど細く/切れやすい。大画面では少し下げて繋がりを優先。
         let thr = THRESH_BASE - (s - 1) * 0.06;
-        thr = Math.max(0.60, Math.min(0.76, thr));
+        if (!seen) thr += UNSEEN_THR_BIAS;
+        thr = Math.max(0.52, Math.min(0.76, thr));
         THRESH_LEVEL = thr;
 
         // guide
@@ -324,7 +337,7 @@ function applyFitScale(){
         applyFitScale();
         const waitFonts = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
         waitFonts.then(()=>{ rebuildTargets(); setTimeout(rebuildTargets, 0); });
-        updateDiag('診断: OK / slime-guided v0.1.14');
+        updateDiag('診断: OK / slime-guided v0.1.15');
       };
 
       function layoutInitial(){
@@ -595,7 +608,7 @@ function triggerExplosion(){
         gBlob.noStroke();
 
         const r = DISC_RADIUS;
-        const BASE_ALPHA = 22;
+        const BASE_ALPHA = (seen ? BASE_ALPHA_SEEN : BASE_ALPHA_UNSEEN);
         // Colon second-tick (":")
         const now = new Date();
         const sec = now.getSeconds();
@@ -625,10 +638,10 @@ function triggerExplosion(){
         const colonR = r * colonScale;
         const colonAlpha = BASE_ALPHA;
 
-        const OUTLINE_SCALE = 1.45;
+        const OUTLINE_SCALE = 1.55;
         // 小さい画面ではアウトライン加算を少し弱めて「太り」を抑える
         const sEff = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
-        const OUTLINE_ALPHA = BASE_ALPHA * 0.35 * Math.min(1.0, Math.max(0.65, sEff));
+        const OUTLINE_ALPHA = BASE_ALPHA * 0.40 * Math.min(1.0, Math.max(0.65, sEff));
 
         // 画面サイズに応じて密度を調整（小さい画面ほど間引いて真っ白にならないようにする）
         const BASE_AREA = DESIGN_W * DESIGN_H;
