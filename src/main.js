@@ -1101,17 +1101,18 @@
               wobbleGain = Math.max(0, (tt - 0.65) / 0.35);
             }
 
-                        const baseHz = WOBBLE_BASE_HZ;
+	            const baseHz = WOBBLE_BASE_HZ;
             const jitterAmp = WOBBLE_JITTER_HZ;
-            const phase = i * 0.37;
+	            // NOTE: avoid shadowing the global state variable `phase`
+	            const phi = i * 0.37;
             const h = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
             const frac = h - Math.floor(h);
             const j = (frac - 0.5) * 2.0;
             const freqX = baseHz + j * jitterAmp * 0.15;
             const freqY = baseHz * 1.3 + j * jitterAmp * 0.11;
 
-            const wobbleX = Math.sin(tSec * freqX + phase) * SEEN_WOBBLE * wobbleGain;
-            const wobbleY = Math.cos(tSec * freqY + phase * 1.7) * SEEN_WOBBLE * wobbleGain;
+	            const wobbleX = Math.sin(tSec * freqX + phi) * SEEN_WOBBLE * wobbleGain;
+	            const wobbleY = Math.cos(tSec * freqY + phi * 1.7) * SEEN_WOBBLE * wobbleGain;
 
             const dx = (targetX + wobbleX) - a.x;
             const dy = (targetY + wobbleY) - a.y;
