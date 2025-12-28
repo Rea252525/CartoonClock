@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.0';
+    const VERSION = 'v0.2.1';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -32,26 +32,45 @@
     const WOBBLE_JITTER_HZ = 16.24;
 
     // --- SLIME renderer params (guided) ---
-    const MAX_BLOB_PIXELS = 1800000;
+    // NOTE:
+    // 画面が小さいと「太りすぎて潰れる」/ 画面が大きいと「途切れ途切れになる」問題は、
+    // DISC_RADIUS / BLUR / THRESH が“固定値”だったのが主因。
+    // ここでは「数字(レイアウト)スケール」と「slimeバッファ解像度(blobScale)」に合わせて
+    // 毎フレーム自動で最適化するように変更しています（v0.1.13）。
+    const MAX_BLOB_PIXELS = 1800000;       // slimeバッファの上限（小さすぎると荒れる / 大きすぎると重い）
+    const MAX_SAMPLE_PARTICLES = 1600;     // (未使用だが互換のため残す)
 
-    const DISC_RADIUS_BASE = 11.5;
+    // --- Base (design @ 1920x1080, blobScale≈2) ---
+    const DISC_RADIUS_BASE = 11.5;         // gBlob上の半径（基準）
     const BLUR_BASE = 2.5;
     const THRESH_BASE = 0.70;
 
-    const SEEN_VIS_THICK_MULT = 1.18;
-    const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT;
-    const UNSEEN_THR_BIAS = -0.12;
+    // --- Appearance tuning (v0.1.17) ---
+    // Make GitHub Pages and local rendering closer.
+    const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
+    const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT; // keep same to avoid thickness jump    // thickness multiplier when unseen
+    const UNSEEN_THR_BIAS = -0.12;         // lower threshold when unseen (helps blobs survive)         // lower threshold when unseen
 
-    const BASE_ALPHA_SEEN = 26;
-    const BASE_ALPHA_UNSEEN = 38;
+    const BASE_ALPHA_SEEN = 26;            // ink amount when seen
+    const BASE_ALPHA_UNSEEN = 38;          // ink amount when unseen          // ink amount when unseen
+
+    // --- Responsive runtime params (updated in updateSlimeParams) ---
+    let DISC_RADIUS = DISC_RADIUS_BASE;
+    let BLUR_AMOUNT = BLUR_BASE;
+    let THRESH_LEVEL = THRESH_BASE;
+    let GUIDE_RADIUS = Math.floor(DISC_RADIUS_BASE * 0.75);
+
+    const USE_GUIDE = true;               // draw faint target guides when seen
+    const GUIDE_ALPHA = 6;                // 0..255 faint
+    const GUIDE_STRIDE = 2;               // use every n-th target
 
     // Font
     const USE_FONT = true;
     const FONT_FAMILY_PRIMARY = 'Inter';
     const FONT_FAMILY_LOCAL   = 'ClockFontLocal';
-    let FONT_WEIGHT = 700;
-    let fontSize = 480;
-    let LETTER_SPACING = -0.02;
+    let FONT_WEIGHT = 100;
+    const LETTER_SPACING = 0.02;
+    let fontSize = 280;
 
     // -------------- Easings (from https://easings.net/ja) --------------
     const clamp01 = (t)=> (t<0?0:(t>1?1:t));
@@ -250,26 +269,35 @@
       let guides = [];
 
       function updateSlimeParams(){
+        // 数字の見た目サイズ（レイアウトスケール×重なり回避スケール）
         const s = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
         const bs = Math.max(1, blobScale || 2);
 
-        const baseVisR = DISC_RADIUS_BASE * 2;
-        const visMult = (SEEN_VIS_THICK_MULT * seenVis01) + (UNSEEN_VIS_THICK_MULT * (1.0 - seenVis01));
-        const desiredVisR = baseVisR * s * visMult;
+        // 基準(1080p付近 / blobScale≈2)での「画面上の半径」をベースに、数字サイズに比例させる
+        // 画面上の半径 ≈ DISC_RADIUS(gBlob) * blobScale
+        const baseVisR = DISC_RADIUS_BASE * 2;       // approx on-screen radius when blobScale=2
 
+        const visMult = (SEEN_VIS_THICK_MULT * seenVis01) + (UNSEEN_VIS_THICK_MULT * (1.0 - seenVis01));
+        const desiredVisR = baseVisR * s * visMult; // scale with digit size and state
+
+
+        // gBlob上の半径に戻す（blobScaleが上がっても二重に太らないようにする）
         let r = desiredVisR / bs;
-        r = Math.max(5.0, Math.min(18.0, r));
+        r = Math.max(5.0, Math.min(18.0, r));        // 安定クランプ（極端な端末で破綻しにくく）
         DISC_RADIUS = r;
 
+        // blur: 半径に比例（rが小さいときはぼかしも小さく）
         let blur = r * 0.22;
         blur = Math.max(1.2, Math.min(4.2, blur));
         BLUR_AMOUNT = blur;
 
+        // threshold: 大きいほど細く/切れやすい。大画面では少し下げて繋がりを優先。
         let thr = THRESH_BASE - (s - 1) * 0.06;
         thr += UNSEEN_THR_BIAS * (1.0 - seenVis01);
         thr = Math.max(0.52, Math.min(0.76, thr));
         THRESH_LEVEL = thr;
 
+        // guide
         GUIDE_RADIUS = Math.max(2, Math.floor(r * 0.55));
       }
 
@@ -464,9 +492,10 @@
         const HH = str.slice(0,2), MM = str.slice(2,4);
 
         let txH = [], txM = [], txColon = [];
-        FONT_WEIGHT = 900; fontSize = H_SIZE;  txH = buildTargetsFor(HH, HN, H_POS.x, H_POS.y);
-        FONT_WEIGHT = 900; fontSize = M_SIZE;  txM = buildTargetsFor(MM, MN, M_POS.x, M_POS.y);
-        FONT_WEIGHT = 700; fontSize = COLON_SIZE; txColon = buildTargetsFor(':', CN, COLON_POS.x, COLON_POS.y);
+                const WEIGHT_HM = 700, WEIGHT_COLON = 100;
+        FONT_WEIGHT = WEIGHT_HM; fontSize = H_SIZE;  txH = buildTargetsFor(HH, HN, H_POS.x, H_POS.y);
+        FONT_WEIGHT = WEIGHT_HM; fontSize = M_SIZE;  txM = buildTargetsFor(MM, MN, M_POS.x, M_POS.y);
+        FONT_WEIGHT = WEIGHT_COLON; fontSize = COLON_SIZE; txColon = buildTargetsFor(':', CN, COLON_POS.x, COLON_POS.y);
 
         function assign(start, count, targets){
           for (let i = 0; i < count; i++){
@@ -889,11 +918,8 @@
       function drawSlime(){
         if (!gBlob) return;
 
+        // 画面サイズの変化に応じて、描画パラメータを常に最新にする
         updateSlimeParams();
-
-        const deform = computeDeform();
-        const cx = p.width * 0.5;
-        const cy = p.height * 0.5;
 
         gBlob.push();
         gBlob.blendMode(gBlob.BLEND);
@@ -901,44 +927,53 @@
         gBlob.blendMode(gBlob.ADD);
         gBlob.noStroke();
 
-        // Apply deform around screen center
-        gBlob.translate((cx)/blobScale, (cy)/blobScale);
-        gBlob.rotate(deform.angle);
-        gBlob.scale(deform.sx, deform.sy);
-        gBlob.translate((-cx)/blobScale, (-cy)/blobScale);
-
         const r = DISC_RADIUS;
         const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
-
-        // ":" tick (keep simple – constant thickness when unseen)
+        // Colon second-tick (":")
         const now = new Date();
         const sec = now.getSeconds();
         const ms = now.getMilliseconds();
-        const u = ms / 1000;
+        const u = ms / 1000; // 0..1 within this second
+
+        // 細くなる最小スケール（かなり細め）
         const COLON_THIN_SCALE = 0.28;
-        let colonScale = 1.0;
-        if (seen){
-          const easeOut = 1 - Math.pow(1 - u, 5); // easeOutQuint
-          colonScale = (sec % 2 === 0)
-            ? (COLON_THIN_SCALE + (1 - COLON_THIN_SCALE) * easeOut)
-            : (1 - (1 - COLON_THIN_SCALE) * easeOut);
+
+        let colonScale;
+        if (!seen){
+          // 見られていないときはコロンの太さは一定（変化させない）
+          colonScale = 1.0;
+        } else {
+          // 偶数秒: 細い→太い（イーズアウト）
+          // 奇数秒: 太い→細い（イーズアウト）
+          const easeOut = 1 - Math.pow(1 - u, 5); // easeOutQuint に変更（https://easings.net/ja より）
+          if (sec % 2 === 0){
+            // even second → 太い側へ寄る
+            colonScale = COLON_THIN_SCALE + (1 - COLON_THIN_SCALE) * easeOut;
+          } else {
+            // odd second → 細い側へ寄る
+            colonScale = 1 - (1 - COLON_THIN_SCALE) * easeOut;
+          }
         }
+
         const colonR = r * colonScale;
+        const colonAlpha = BASE_ALPHA;
 
         const OUTLINE_SCALE = 1.55;
+        // 小さい画面ではアウトライン加算を少し弱めて「太り」を抑える
         const sEff = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
         const OUTLINE_ALPHA = BASE_ALPHA * 0.40 * Math.min(1.0, Math.max(0.65, sEff));
 
-        // Density tuning on small screens
+        // 画面サイズに応じて密度を調整（小さい画面ほど間引いて真っ白にならないようにする）
         const BASE_AREA = DESIGN_W * DESIGN_H;
         const area = Math.max(1, p.width * p.height);
         let densityScale = 1.0;
         if (area < BASE_AREA){
           const tArea = BASE_AREA / area;
-          const AREA_DENSITY_POW = 0.7;
-          densityScale = Math.min(3.0, Math.pow(tArea, AREA_DENSITY_POW));
+          const AREA_DENSITY_POW = 0.7; // 調整用：0.5〜1.0くらいで好みを探る
+          densityScale = Math.min(3.0, Math.pow(tArea, AREA_DENSITY_POW)); // 1〜約3倍まで
         }
 
+        // サンプリングの目標数（B_*）に densityScale を掛けることで、小さい画面では粒を間引く
         const B_H_BASE = 1400, B_M_BASE = 1400, B_S_BASE = 120, B_C_BASE = 90;
         const B_H = B_H_BASE * densityScale;
         const B_M = B_M_BASE * densityScale;
@@ -953,23 +988,24 @@
         for (let i=0;i<HN;i+=sH){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
         for (let i=HN;i<HN+MN;i+=sM){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
         for (let i=HN+MN;i<HN+MN+SN;i+=sS){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
-        for (let i=HN+MN+SN;i<N;i+=sC){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2); }
-
-        // Outline smoothing pass for H & M
-        for (let i=0;i<HN;i+=sH){ const a=pts[i]; gBlob.fill(255, OUTLINE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2); }
-        for (let i=HN;i<HN+MN;i+=sM){ const a=pts[i]; gBlob.fill(255, OUTLINE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2); }
-
-        // faint guides (useful while tuning)
-        const gr = Math.max(2, Math.floor(GUIDE_RADIUS));
-        const GUIDE_STRIDE = 4;
-        const GUIDE_ALPHA = 8;
-        if (guides && guides.length){
-          gBlob.fill(255, GUIDE_ALPHA);
-          for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){
-            const t = guides[gi];
-            gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2);
-          }
+        for (let i=HN+MN+SN;i<N;i+=sC){ const a=pts[i]; gBlob.fill(255, colonAlpha); gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2); }
+        
+        // Extra wide, faint pass just for H & M to smooth their outlines
+        for (let i=0;i<HN;i+=sH){
+          const a = pts[i];
+          gBlob.fill(255, OUTLINE_ALPHA);
+          gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
         }
+        for (let i=HN;i<HN+MN;i+=sM){
+          const a = pts[i];
+          gBlob.fill(255, OUTLINE_ALPHA);
+          gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
+        }
+
+        const gr = Math.max(2, Math.floor(GUIDE_RADIUS));
+        const GUIDE_STRIDE = 4, GUIDE_ALPHA = 8;
+        gBlob.fill(255, GUIDE_ALPHA);
+        for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){ const t=guides[gi]; gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2); }
 
         gBlob.pop();
         try { gBlob.filter(p.BLUR, BLUR_AMOUNT); } catch(e){}
