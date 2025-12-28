@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.1';
+    const VERSION = 'v0.2.2';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -1101,12 +1101,17 @@
               wobbleGain = Math.max(0, (tt - 0.65) / 0.35);
             }
 
-            const phaseRand = i * 12.9898;
-            const freqX = (WOBBLE_BASE_HZ + (Math.sin(i*0.123)+1)*0.5*WOBBLE_JITTER_HZ);
-            const freqY = (WOBBLE_BASE_HZ + (Math.cos(i*0.097)+1)*0.5*WOBBLE_JITTER_HZ);
+                        const baseHz = WOBBLE_BASE_HZ;
+            const jitterAmp = WOBBLE_JITTER_HZ;
+            const phase = i * 0.37;
+            const h = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+            const frac = h - Math.floor(h);
+            const j = (frac - 0.5) * 2.0;
+            const freqX = baseHz + j * jitterAmp * 0.15;
+            const freqY = baseHz * 1.3 + j * jitterAmp * 0.11;
 
-            const wobbleX = Math.sin(tSec*freqX + phaseRand) * SEEN_WOBBLE * wobbleGain;
-            const wobbleY = Math.cos(tSec*freqY + phaseRand*1.7) * SEEN_WOBBLE * wobbleGain;
+            const wobbleX = Math.sin(tSec * freqX + phase) * SEEN_WOBBLE * wobbleGain;
+            const wobbleY = Math.cos(tSec * freqY + phase * 1.7) * SEEN_WOBBLE * wobbleGain;
 
             const dx = (targetX + wobbleX) - a.x;
             const dy = (targetY + wobbleY) - a.y;
