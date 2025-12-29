@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.6';
+    const VERSION = 'v0.2.7';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -741,7 +741,7 @@
       // ---------------- Entrance motion helpers ----------------
       function ent1aProgress01(tMs){
         // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
-        // Spec v0.2.6:
+        // Spec v0.2.7:
         // 0→-50 : 0.1s (linear)
         // -50→150 : 0.1s (linear)
         // 150→100 : 0.8s (easeInExpo)
@@ -1003,6 +1003,50 @@
 
         if (phase !== 'entrance') return {angle,sx,sy};
 
+        // ①-a: スクストの「横→縦→戻る」を “描画変形（全体の潰れ/伸び）” でも表現する
+        if (ent.active && ent.mode === '1a'){
+          const t = Math.max(0, nowMs - ent.startMs); // ms
+          const H_STRETCH = 1.95;   // 横に伸びる最大
+          const H_SQUASH  = 0.58;   // 縦に潰れる最大
+          const V_STRETCH = 1.95;   // 縦に伸びる最大
+          const V_SQUASH  = 0.58;   // 横に潰れる最大
+
+          if (t < ENT1A_T1){
+            // 0→-50（0.1s）：左右だけ伸びる（Yは潰れる）
+            const u = clamp01(t / ENT1A_T1);
+            const e = easeOutQuad(u);
+            sx = 1 + (H_STRETCH - 1) * e;
+            sy = 1 - (1 - H_SQUASH) * e;
+            angle = 0;
+            return {angle,sx,sy};
+          }
+
+          if (t < ENT1A_T1 + ENT1A_T2){
+            // -50→150（0.1s）：横伸び→縦伸びに素早く切り替え
+            const u = clamp01((t - ENT1A_T1) / ENT1A_T2); // 0..1
+            const e = u; // linear
+            const sx1 = H_STRETCH, sy1 = H_SQUASH;
+            const sx2 = V_SQUASH,  sy2 = V_STRETCH;
+            sx = sx1 + (sx2 - sx1) * e;
+            sy = sy1 + (sy2 - sy1) * e;
+            angle = 0;
+            return {angle,sx,sy};
+          }
+
+          // 150→100（0.8s）：反動で戻る（easeInExpoでゆっくり整う）
+          {
+            const u = clamp01((t - ENT1A_T1 - ENT1A_T2) / ENT1A_T3);
+            const e = easeInExpo(u);
+            // 縦伸び状態→1へ戻す
+            const sx0 = V_SQUASH, sy0 = V_STRETCH;
+            sx = sx0 + (1 - sx0) * e;
+            sy = sy0 + (1 - sy0) * e;
+            angle = 0;
+            return {angle,sx,sy};
+          }
+        }
+
+
         if (ent.mode === '2b' || ent.mode === '2c' || ent.mode === '2d'){
           const vx = ent.vX, vy = ent.vY;
           const speed = Math.sqrt(vx*vx + vy*vy);
@@ -1066,6 +1110,21 @@ function drawSlime(){
         gBlob.background(0);
         gBlob.blendMode(gBlob.ADD);
         gBlob.noStroke();
+
+        // global deformation (entrance / pudding bounce) — applied to the whole blob render
+        const def = computeDeform();
+        const useDef = (Math.abs(def.sx - 1) + Math.abs(def.sy - 1) + Math.abs(def.angle)) > 1e-4;
+
+        // draw main particles under deformation so v0.1.17 style stays (circles+blur+threshold), only the "world" squishes
+        gBlob.push();
+        if (useDef){
+          const cx = (p.width * 0.5) / blobScale;
+          const cy = (p.height * 0.5) / blobScale;
+          gBlob.translate(cx, cy);
+          if (def.angle) gBlob.rotate(def.angle);
+          gBlob.scale(def.sx, def.sy);
+          gBlob.translate(-cx, -cy);
+        }
 
         const r = DISC_RADIUS;
         const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
@@ -1141,6 +1200,8 @@ function drawSlime(){
           gBlob.fill(255, OUTLINE_ALPHA);
           gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
         }
+
+        gBlob.pop(); // end deformation layer
 
         const gr = Math.max(2, Math.floor(GUIDE_RADIUS));
         const GUIDE_STRIDE = 4, GUIDE_ALPHA = 8;
