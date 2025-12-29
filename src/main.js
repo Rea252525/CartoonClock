@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.4';
+    const VERSION = 'v0.2.5';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -108,9 +108,9 @@
     const RECENT_SEEN_MS = 4000;
 
     // ①-a timeline (ms)
-    const ENT1A_T1 = 160;
-    const ENT1A_T2 = 420;
-    const ENT1A_T3 = 280;
+    const ENT1A_T1 = 100;
+    const ENT1A_T2 = 100;
+    const ENT1A_T3 = 800;
     const ENT1A_TOTAL = ENT1A_T1 + ENT1A_T2 + ENT1A_T3;
 
     // ②-a delayed subset
@@ -728,19 +728,23 @@
       // ---------------- Entrance motion helpers ----------------
       function ent1aProgress01(tMs){
         // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
+        // Spec v0.2.5:
+        // 0→-50 : 0.1s (linear)
+        // -50→150 : 0.1s (linear)
+        // 150→100 : 0.8s (easeInExpo)
         if (tMs <= 0) return 0;
         if (tMs >= ENT1A_TOTAL) return 1;
 
         if (tMs < ENT1A_T1){
-          const u = tMs / ENT1A_T1;
-          const e = easeOutExpo(u);
-          return 0 + (-0.5 - 0) * e;
+          const u = clamp01(tMs / ENT1A_T1);
+          // linear (時間が短いのでイージングなし)
+          return 0 + (-0.5 - 0) * u;
         }
         tMs -= ENT1A_T1;
         if (tMs < ENT1A_T2){
-          const u = tMs / ENT1A_T2;
-          const e = easeInOutExpo(u);
-          return -0.5 + (1.5 - (-0.5)) * e;
+          const u = clamp01(tMs / ENT1A_T2);
+          // linear (時間が短いのでイージングなし)
+          return -0.5 + (1.5 - (-0.5)) * u;
         }
         tMs -= ENT1A_T2;
         const u = clamp01(tMs / ENT1A_T3);
@@ -871,6 +875,14 @@
         if (ent.mode !== '1a' && ent.mode !== '2a') return;
 
         const t = nowMs - ent.startMs;
+        // Ensure the ①-a timeline finishes exactly at ENT1A_TOTAL
+        if (t >= ENT1A_TOTAL){
+          ent._mInit = true;
+          ent._mSmooth = 1;
+          ent.mFrame = 1;
+          ent._mLastMs = nowMs;
+          return;
+        }
         const raw = ent1aProgress01(t);
 
         if (!(ENT1A_SMOOTH_TAU_MS > 0)){
