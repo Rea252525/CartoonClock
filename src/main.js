@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.5';
+    const VERSION = 'v0.2.6';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -112,6 +112,18 @@
     const ENT1A_T2 = 100;
     const ENT1A_T3 = 800;
     const ENT1A_TOTAL = ENT1A_T1 + ENT1A_T2 + ENT1A_T3;
+
+    // ①-a deformation tuning (visual squish & stretch)
+    // 0→-50 : 横に“間違って”伸びる（左右の頂点がふち側へ）
+    // -50→150 : 縦に伸びる（上下の頂点がふち側へ）
+    // 150→100 : 戻りながら整える
+    const ENT1A_STRETCH = 0.85; // max +scale (e.g. 1.85)
+    const ENT1A_SQUASH  = 0.35; // max -scale (e.g. 0.65)
+
+    // ①-a settle "pudding" wobble after reaching 100
+    const ENT1A_POYO_MS  = 650; // duration after entrance ends
+    const ENT1A_POYO_HZ  = 6.5; // wobble frequency
+    const ENT1A_POYO_AMP = 0.16; // scale delta amplitude (render-only)
 
     // ②-a delayed subset
     const ENT2A_DELAY_MS = 500;
@@ -648,6 +660,7 @@
         ent._mInit = false;
         ent._mSmooth = 0;
         ent._mLastMs = nowMs;
+        ent.poyoStartMs = 0;
         ent.mFrame = 0;
         ent._randWalls = null;
         ent.subsetMask = null;
@@ -728,7 +741,7 @@
       // ---------------- Entrance motion helpers ----------------
       function ent1aProgress01(tMs){
         // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
-        // Spec v0.2.5:
+        // Spec v0.2.6:
         // 0→-50 : 0.1s (linear)
         // -50→150 : 0.1s (linear)
         // 150→100 : 0.8s (easeInExpo)
@@ -911,9 +924,21 @@
         const t = nowMs - ent.startMs;
 
         if (ent.mode === '1a'){
+          // --- ①-a: "wrong-way" slip (mostly horizontal), then overshoot, then return ---
           const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
           const a = pts[i];
-          return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
+
+          // Segment-aware axis weighting:
+          // 0→-50 は「左右だけ伸びる」ニュアンスなので、Y方向の移動をかなり抑える
+          let mx = m, my = m;
+          if (t < ENT1A_T1){
+            my = m * 0.12;
+          }
+
+          return {
+            x: a.sx + (a.tx - a.sx) * mx,
+            y: a.sy + (a.ty - a.sy) * my
+          };
         }
 
         if (ent.mode === '2a'){
@@ -962,6 +987,19 @@
       function computeDeform(){
         // default: identity
         let angle = 0, sx = 1, sy = 1;
+        const nowMs = performance.now();
+
+        // ①-aの「100になった瞬間、プリンみたいにポヨン」を render-only で追加
+        if (phase === 'display' && ent.poyoStartMs && (nowMs - ent.poyoStartMs) < ENT1A_POYO_MS){
+          const dt = (nowMs - ent.poyoStartMs) * 0.001;
+          const decay = Math.exp(-dt * 5.5);
+          const w = Math.sin(dt * Math.PI * 2 * ENT1A_POYO_HZ);
+          const a = ENT1A_POYO_AMP * decay * w;
+          angle = 0;
+          sx = 1 + a;
+          sy = 1 - a * 0.85;
+          return {angle,sx,sy};
+        }
 
         if (phase !== 'entrance') return {angle,sx,sy};
 
@@ -983,21 +1021,41 @@
             sy = perp;
           }
         } else {
-          // 1a / 2a: slight squash near overshoot (m>1)
-          const nowMs = performance.now();
+          if (!(ent.mode === '1a' || ent.mode === '2a')) return {angle,sx,sy};
+
+          // 1a / 2a: スクアッシュ&ストレッチ（ニュアンス：横→縦→戻り）
           const t = nowMs - ent.startMs;
-          const m = ent.mode==='1a' ? ent1aProgress01(t) : ent1aProgress01(t);
-          const overs = Math.max(0, Math.min(1, (m - 1.0) / 0.5));
-          if (overs > 0){
+          const lerp = (a,b,u)=> a + (b-a)*u;
+
+          // 横に伸びる（0→-50）
+          if (t < ENT1A_T1){
+            const u = clamp01(t / ENT1A_T1);
             angle = 0;
-            sx = 1 + 0.20*overs;
-            sy = 1 - 0.14*overs;
+            sx = 1 + ENT1A_STRETCH * u;
+            sy = 1 - ENT1A_SQUASH  * u;
+          }
+          // 縦に伸びる（-50→150）
+          else if (t < ENT1A_T1 + ENT1A_T2){
+            const u = clamp01((t - ENT1A_T1) / ENT1A_T2);
+            angle = 0;
+            const sxA = 1 + ENT1A_STRETCH, syA = 1 - ENT1A_SQUASH;
+            const sxB = 1 - ENT1A_SQUASH,  syB = 1 + ENT1A_STRETCH;
+            sx = lerp(sxA, sxB, u);
+            sy = lerp(syA, syB, u);
+          }
+          // 戻りながら整える（150→100 / easeInExpo）
+          else {
+            const u = clamp01((t - (ENT1A_T1 + ENT1A_T2)) / ENT1A_T3);
+            const e = easeInExpo(u);
+            angle = 0;
+            const sxB = 1 - ENT1A_SQUASH,  syB = 1 + ENT1A_STRETCH;
+            sx = lerp(sxB, 1, e);
+            sy = lerp(syB, 1, e);
           }
         }
         return {angle,sx,sy};
       }
-
-      function drawSlime(){
+function drawSlime(){
         if (!gBlob) return;
 
         // 画面サイズの変化に応じて、描画パラメータを常に最新にする
@@ -1143,6 +1201,10 @@
         if (phase === 'entrance' && ent.active){
           const t = nowMs - ent.startMs;
           if (t >= ent.durationMs){
+            // ①-a/②-a: 到達した瞬間に“プリンぽよん”を開始（render-only）
+            if (ent.mode === '1a' || ent.mode === '2a'){
+              ent.poyoStartMs = nowMs;
+            }
             ent.active = false;
             phase = 'display';
             ent._randWalls = null;
