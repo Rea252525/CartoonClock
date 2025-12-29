@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.3';
+    const VERSION = 'v0.2.4';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -21,6 +21,10 @@
 
     // Entrance feels a bit stronger so it "snaps" into place
     const ENTRANCE_SEEK_MULT = 1.18;
+
+    // Entrance ①-a (スクアッシュ&ストレッチ) を“なめらか”にするためのm低域フィルタ
+    // 0で無効（そのままのキレ）
+    const ENT1A_SMOOTH_TAU_MS = 70;
 
     // Face detection
     const DETECT_EVERY_N_FRAMES = 6;
@@ -165,6 +169,11 @@
         vX:0, vY:0,
         mix01:0,
         impact01:0,
+        // m smoothing (for ①-a / ②-a non-delayed part)
+        mFrame:0,
+        _mSmooth:0,
+        _mInit:false,
+        _mLastMs:0,
       };
 
       // Camera state
@@ -635,6 +644,11 @@
         ent.active = true;
         ent.mode = mode;
         ent.startMs = nowMs;
+        // reset m smoothing state
+        ent._mInit = false;
+        ent._mSmooth = 0;
+        ent._mLastMs = nowMs;
+        ent.mFrame = 0;
         ent._randWalls = null;
         ent.subsetMask = null;
         ent.offx = null;
@@ -851,11 +865,41 @@
         }
       }
 
+      // Update per-frame entrance parameters (avoid per-particle state updates)
+      function updateEntranceFrame(nowMs){
+        if (!ent.active) return;
+        if (ent.mode !== '1a' && ent.mode !== '2a') return;
+
+        const t = nowMs - ent.startMs;
+        const raw = ent1aProgress01(t);
+
+        if (!(ENT1A_SMOOTH_TAU_MS > 0)){
+          ent.mFrame = raw;
+          return;
+        }
+
+        const last = ent._mLastMs || nowMs;
+        const dt = Math.min(50, Math.max(0, nowMs - last));
+        ent._mLastMs = nowMs;
+
+        if (!ent._mInit){
+          ent._mInit = true;
+          ent._mSmooth = raw;
+          ent.mFrame = raw;
+          return;
+        }
+
+        const k = 1 - Math.exp(-dt / ENT1A_SMOOTH_TAU_MS);
+        ent._mSmooth = ent._mSmooth + (raw - ent._mSmooth) * k;
+        ent.mFrame = ent._mSmooth;
+      }
+
+
       function computeEntranceDesired(i, nowMs){
         const t = nowMs - ent.startMs;
 
         if (ent.mode === '1a'){
-          const m = ent1aProgress01(t);
+          const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
           const a = pts[i];
           return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
         }
@@ -870,7 +914,7 @@
             const e = easeOutCirc(u);
             return {x: a.sx + (a.tx - a.sx) * e, y: a.sy + (a.ty - a.sy) * e};
           } else {
-            const m = ent1aProgress01(t);
+            const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
             return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
           }
         }
@@ -1077,6 +1121,11 @@
           setSlack(nowMs);
         }
         prevSeen = seen;
+
+        // precompute entrance frame values (smooth m)
+        if (phase === 'entrance' && ent.active){
+          updateEntranceFrame(nowMs);
+        }
 
         // advance entrance end
         if (phase === 'entrance' && ent.active){
