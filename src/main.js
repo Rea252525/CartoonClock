@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.2';
+    const VERSION = 'v0.2.3';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -127,7 +127,15 @@
       }));
 
       // Visual smoothing: avoid thickness jump on seen/unseen
+      // `seen` is the effective seen state used by the simulation.
+      // `simSeen` reflects the UI checkbox state (when camera is not enabled).
+      let simSeen = true;
       let seen = true, prevSeen = true;
+
+      // Manual test override: allow entrance test buttons to run even when
+      // "見られている（シミュレーション）" is OFF and no face is detected.
+      // When active, we treat the system as "seen" until this timestamp.
+      let manualSeenUntil = 0;
       let seenVis01 = 1.0;
       const SEEN_VIS_LERP_IN = 0.25;
       const SEEN_VIS_LERP_OUT = 0.07;
@@ -198,15 +206,18 @@
       }
 
       if (fakeSeen){
-        fakeSeen.addEventListener('change', ()=>{ seen = !!fakeSeen.checked; });
-        seen = !!fakeSeen.checked;
+        fakeSeen.addEventListener('change', ()=>{ simSeen = !!fakeSeen.checked; });
+        simSeen = !!fakeSeen.checked;
       }
 
       if (btnSim){
         btnSim.addEventListener('click', ()=>{
           cam.enabled = false;
           if (cam.wrap) cam.wrap.style.display = 'none';
+          simSeen = true;
           seen = true;
+          prevSeen = true;
+          manualSeenUntil = 0;
           if (fakeSeen) fakeSeen.checked = true;
           logDiag('診断: シミュレーション ON');
         });
@@ -228,14 +239,27 @@
       }
 
       // --- Test buttons ---
-      function ensureSimSeen(){
-        if (cam.enabled) return;
-        if (fakeSeen){ fakeSeen.checked = true; }
-        seen = true;
+      function entranceDurationMsFor(mode){
+        if (mode === '1a') return ENT1A_TOTAL;
+        if (mode === '2a') return ENT2A_TOTAL;
+        if (mode === '2b' || mode === '2c' || mode === '2d') return Math.floor(BOUNCE_TOTAL * 1000);
+        return ENT1A_TOTAL;
       }
+
+      // Allow test buttons to run even if simulation is OFF and no face is detected.
+      // We temporarily treat the system as "seen" for a short window.
+      function forceSeenForTest(durationMs){
+        const now = performance.now();
+        manualSeenUntil = Math.max(manualSeenUntil, now + Math.max(0, durationMs|0));
+        // Prevent the normal "rising edge" handler from starting a random entrance on the next frame.
+        seen = true;
+        prevSeen = true;
+      }
+
       function manualStart(mode){
-        ensureSimSeen();
-        startEntrance(mode);
+        const dur = entranceDurationMsFor(mode) + 1200; // + a bit of display time
+        forceSeenForTest(dur);
+        startEntrance(mode, performance.now());
       }
       if (btnEnt1a) btnEnt1a.addEventListener('click', ()=>manualStart('1a'));
       if (btnEnt2a) btnEnt2a.addEventListener('click', ()=>manualStart('2a'));
@@ -243,11 +267,11 @@
       if (btnEnt2c) btnEnt2c.addEventListener('click', ()=>manualStart('2c'));
       if (btnEnt2d) btnEnt2d.addEventListener('click', ()=>manualStart('2d'));
       if (btnEntAuto) btnEntAuto.addEventListener('click', ()=>{
-        ensureSimSeen();
-        // simulate "recent" or "long" by clicking twice if needed (not required)
+        forceSeenForTest(Math.floor(BOUNCE_TOTAL * 1000) + 1200);
         startEntranceAuto(performance.now());
       });
       if (btnToSlack) btnToSlack.addEventListener('click', ()=>{
+        manualSeenUntil = 0;
         setSlack(performance.now(), true);
       });
 
@@ -540,6 +564,8 @@
             logDiag('診断: Motion Fallback');
           }
           if (fakeSeen) fakeSeen.checked = false;
+          simSeen = false;
+          manualSeenUntil = 0;
         }catch(e){
           console.error(e);
           logDiag('診断: カメラ不可（権限/環境）');
@@ -1021,7 +1047,8 @@
         if (cam.enabled && (p.frameCount % DETECT_EVERY_N_FRAMES === 0)) runDetection(nowMs);
 
         const camSeen = cam.enabled ? (nowMs - cam.lastSeenAt <= SEEN_DEBOUNCE_MS) : false;
-        const effectiveSeen = cam.enabled ? camSeen : !!seen;
+        const manualSeen = (nowMs < manualSeenUntil);
+        const effectiveSeen = (cam.enabled ? camSeen : !!simSeen) || manualSeen;
         seen = effectiveSeen;
 
         // smooth visuals
