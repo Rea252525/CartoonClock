@@ -214,6 +214,10 @@
       let seenVis01 = 1.0;
       const SEEN_VIS_LERP_IN = 0.25;
       const SEEN_VIS_LERP_OUT = 0.07;
+      // Visual smoothing uses time-based exponential decay so it stays smooth even if FPS fluctuates.
+      let prevDrawMs = performance.now();
+      const SEEN_VIS_TAU_IN_MS  = 160; // how quickly visuals become "seen"
+      const SEEN_VIS_TAU_OUT_MS = 320; // how quickly visuals fade to "unseen"
 
       // Phase: 'slack' | 'entrance' | 'display'
       let phase = 'display';
@@ -1143,6 +1147,8 @@
         try { gBlob.filter(p.THRESHOLD, THRESH_LEVEL); } catch(e){ gBlob.filter(p.THRESHOLD); }
         p.image(gBlob, 0, 0, p.width, p.height);
       }
+        const dtMs = Math.max(0, Math.min(120, nowMs - prevDrawMs));
+        prevDrawMs = nowMs;
 
       // ---------------- Main loop ----------------
       p.draw = function(){
@@ -1158,11 +1164,18 @@
 
         // smooth visuals
         {
-          const target = seen ? 1.0 : 0.0;
-          const k = (target > seenVis01) ? SEEN_VIS_LERP_IN : SEEN_VIS_LERP_OUT;
-          seenVis01 += (target - seenVis01) * k;
-          if (seenVis01 < 0) seenVis01 = 0;
-          if (seenVis01 > 1) seenVis01 = 1;
+          if (phase === 'entrance'){
+            // Keep rendering fully in "seen" mode while digits are snapping back.
+            // This removes the slight stepping caused by threshold/radius transitioning.
+            seenVis01 = 1.0;
+          } else {
+            const target = seen ? 1.0 : 0.0;
+            const tau = (target > seenVis01) ? SEEN_VIS_TAU_IN_MS : SEEN_VIS_TAU_OUT_MS;
+            const a = 1.0 - Math.exp(-dtMs / Math.max(1, tau));
+            seenVis01 += (target - seenVis01) * a;
+            if (seenVis01 < 0) seenVis01 = 0;
+            if (seenVis01 > 1) seenVis01 = 1;
+          }
         }
 
         // time update (HHMM only)
