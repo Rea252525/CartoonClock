@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.9';
+    const VERSION = 'v0.2.6';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -22,9 +22,26 @@
     // Entrance feels a bit stronger so it "snaps" into place
     const ENTRANCE_SEEK_MULT = 1.18;
 
-    // Entrance ①-a (スクアッシュ&ストレッチ) を“なめらか”にするためのm低域フィルタ
+    // Entrance ②-a（スクスト+遅れ）の“なめらか”用 低域フィルタ
     // 0で無効（そのままのキレ）
-    const ENT1A_SMOOTH_TAU_MS = 70;
+    const ENT2A_SMOOTH_TAU_MS = 70;
+
+    // ---- ①-a スクスト（粒子の移動で「伸びてる感」を作る） ----
+    // ここをいじると ①-a の「長さ / 激しさ / 伸び量」が変わります。
+    const ENT1A_GATHER_MS = 380;
+    const ENT1A_H_MS      = 520;
+    const ENT1A_V_MS      = 520;
+    const ENT1A_RECOIL_MS = 520;
+    const ENT1A_BOUNCE_MS = 520;
+
+    const ENT1A_STRETCH_RATIO      = 0.34; // 画面短辺に対する伸び量
+    const ENT1A_THICKNESS_RATIO    = 0.06; // 直交方向の厚み（大きいほど太い液体）
+    const ENT1A_CENTER_SHIFT_RATIO = 0.10; // 伸びる時の中心移動
+    const ENT1A_DIGIT_MIX_START    = 0.86; // recoil内で数字に寄り始める位置（大きいほど「最後に戻る」）
+
+    const ENT1A_SEEK_MULT    = 1.75; // ①-a中の吸引力倍率（大きいほど激しい）
+    const ENT1A_DAMP         = 0.84; // ①-a中の減衰（大きいほど跳ねる/残る）
+    const ENT1A_EXTRA_JITTER = 1.20; // ①-a中のランダム加速度（液体感）
 
     // Face detection
     const DETECT_EVERY_N_FRAMES = 6;
@@ -104,37 +121,27 @@
       return (t < 0.5) ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2;
     }
 
-    // Added (was missing in v0.2.7): https://easings.net/ja#easeOutQuad
+    
     function easeOutQuad(t){
       t = clamp01(t);
       return 1 - (1 - t) * (1 - t);
     }
-
-    // ---------------- Entrance Specs ----------------
+// ---------------- Entrance Specs ----------------
     const RECENT_SEEN_MS = 4000;
 
-    // ①-a timeline (ms)
-    const ENT1A_T1 = 100;
-    const ENT1A_T2 = 100;
-    const ENT1A_T3 = 800;
-    const ENT1A_TOTAL = ENT1A_T1 + ENT1A_T2 + ENT1A_T3;
+    // ①-a timeline (ms) - 粒子の移動で「伸びる」→最後に数字に戻る
+    const ENT1A_TOTAL = ENT1A_GATHER_MS + ENT1A_H_MS + ENT1A_V_MS + ENT1A_RECOIL_MS + ENT1A_BOUNCE_MS;
 
-    // ①-a deformation tuning (visual squish & stretch)
-    // 0→-50 : 横に“間違って”伸びる（左右の頂点がふち側へ）
-    // -50→150 : 縦に伸びる（上下の頂点がふち側へ）
-    // 150→100 : 戻りながら整える
-    const ENT1A_STRETCH = 0.85; // max +scale (e.g. 1.85)
-    const ENT1A_SQUASH  = 0.35; // max -scale (e.g. 0.65)
-
-    // ①-a settle "pudding" wobble after reaching 100
-    const ENT1A_POYO_MS  = 650; // duration after entrance ends
-    const ENT1A_POYO_HZ  = 6.5; // wobble frequency
-    const ENT1A_POYO_AMP = 0.16; // scale delta amplitude (render-only)
+    // ②-a（スクスト+遅れ）のベース曲線（旧①-aのmタイムラインを流用）
+    const ENT2A_BASE_T1 = 100;
+    const ENT2A_BASE_T2 = 100;
+    const ENT2A_BASE_T3 = 800;
+    const ENT2A_BASE_TOTAL = ENT2A_BASE_T1 + ENT2A_BASE_T2 + ENT2A_BASE_T3;
 
     // ②-a delayed subset
     const ENT2A_DELAY_MS = 500;
     const ENT2A_CATCH_MS = 700;
-    const ENT2A_TOTAL = Math.max(ENT1A_TOTAL, ENT2A_DELAY_MS + ENT2A_CATCH_MS);
+    const ENT2A_TOTAL = Math.max(ENT2A_BASE_TOTAL, ENT2A_DELAY_MS + ENT2A_CATCH_MS);
 
     // ②-b/c/d bounce timeline (seconds)
     const BOUNCE_DURS = [0.1,0.1,0.1, 0.2,0.2,0.2, 0.3,0.3,0.3, 0.3, 0.5]; // total ~2.6s
@@ -146,6 +153,9 @@
       let pts = new Array(N).fill(0).map(()=>({
         x:0,y:0,vx:0,vy:0,tx:0,ty:0,group:0,
         sx:0,sy:0, // entrance start positions
+        r0:(Math.random()*2-1),
+        r1:(Math.random()*2-1),
+        r2:(Math.random()*2-1),
       }));
 
       // Visual smoothing: avoid thickness jump on seen/unseen
@@ -177,6 +187,9 @@
         mode:'1a',
         startMs:0,
         durationMs:0,
+        // for ①-a
+        dirX:1,
+        dirY:1,
         // for ②-a
         subsetMask:null, // Uint8Array(N) with 0/1
         // for bounce
@@ -187,7 +200,7 @@
         vX:0, vY:0,
         mix01:0,
         impact01:0,
-        // m smoothing (for ①-a / ②-a non-delayed part)
+        // m smoothing (for ②-a non-delayed part)
         mFrame:0,
         _mSmooth:0,
         _mInit:false,
@@ -318,6 +331,10 @@
       let GUIDE_RADIUS = Math.floor(DISC_RADIUS_BASE * 0.75);
 
       let guides = [];
+
+      // group target centroids (0: H, 1: M, 2: :)
+      let gTX = new Float32Array(3);
+      let gTY = new Float32Array(3);
 
       function updateSlimeParams(){
         // 数字の見た目サイズ（レイアウトスケール×重なり回避スケール）
@@ -561,6 +578,24 @@
         assign(HN + MN, CN, txColon);
 
         guides = txH.concat(txM, txColon);
+
+        // group target centroids (used by ①-a)
+        {
+          let sx=0, sy=0;
+          for (let i=0;i<HN;i++){ sx += pts[i].tx; sy += pts[i].ty; }
+          gTX[0] = sx / Math.max(1, HN);
+          gTY[0] = sy / Math.max(1, HN);
+
+          sx=0; sy=0;
+          for (let i=HN;i<HN+MN;i++){ sx += pts[i].tx; sy += pts[i].ty; }
+          gTX[1] = sx / Math.max(1, MN);
+          gTY[1] = sy / Math.max(1, MN);
+
+          sx=0; sy=0;
+          for (let i=HN+MN;i<HN+MN+CN;i++){ sx += pts[i].tx; sy += pts[i].ty; }
+          gTX[2] = sx / Math.max(1, CN);
+          gTY[2] = sy / Math.max(1, CN);
+        }
         updateSlimeParams();
       }
 
@@ -666,7 +701,6 @@
         ent._mInit = false;
         ent._mSmooth = 0;
         ent._mLastMs = nowMs;
-        ent.poyoStartMs = 0;
         ent.mFrame = 0;
         ent._randWalls = null;
         ent.subsetMask = null;
@@ -684,6 +718,8 @@
 
         if (mode === '1a'){
           ent.durationMs = ENT1A_TOTAL;
+          ent.dirX = (Math.random() < 0.5) ? -1 : 1;
+          ent.dirY = (Math.random() < 0.5) ? -1 : 1;
         } else if (mode === '2a'){
           ent.durationMs = ENT2A_TOTAL;
           ent.subsetMask = buildDelayedSubsetMask();
@@ -701,6 +737,8 @@
         } else {
           ent.durationMs = ENT1A_TOTAL;
           ent.mode = '1a';
+          ent.dirX = (Math.random() < 0.5) ? -1 : 1;
+          ent.dirY = (Math.random() < 0.5) ? -1 : 1;
         }
 
         phase = 'entrance';
@@ -745,28 +783,29 @@
       }
 
       // ---------------- Entrance motion helpers ----------------
-      function ent1aProgress01(tMs){
+      // ②-a（スクスト+遅れ）のベース曲線（m: 0..-0.5..1.5..1.0）
+      function ent2aBaseProgress01(tMs){
         // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
-        // Spec v0.2.7:
+        // Spec v0.2.5 (legacy):
         // 0→-50 : 0.1s (linear)
         // -50→150 : 0.1s (linear)
         // 150→100 : 0.8s (easeInExpo)
         if (tMs <= 0) return 0;
-        if (tMs >= ENT1A_TOTAL) return 1;
+        if (tMs >= ENT2A_BASE_TOTAL) return 1;
 
-        if (tMs < ENT1A_T1){
-          const u = clamp01(tMs / ENT1A_T1);
+        if (tMs < ENT2A_BASE_T1){
+          const u = clamp01(tMs / ENT2A_BASE_T1);
           // linear (時間が短いのでイージングなし)
           return 0 + (-0.5 - 0) * u;
         }
-        tMs -= ENT1A_T1;
-        if (tMs < ENT1A_T2){
-          const u = clamp01(tMs / ENT1A_T2);
+        tMs -= ENT2A_BASE_T1;
+        if (tMs < ENT2A_BASE_T2){
+          const u = clamp01(tMs / ENT2A_BASE_T2);
           // linear (時間が短いのでイージングなし)
           return -0.5 + (1.5 - (-0.5)) * u;
         }
-        tMs -= ENT1A_T2;
-        const u = clamp01(tMs / ENT1A_T3);
+        tMs -= ENT2A_BASE_T2;
+        const u = clamp01(tMs / ENT2A_BASE_T3);
         const e = easeInExpo(u);
         return 1.5 + (1.0 - 1.5) * e;
       }
@@ -891,20 +930,20 @@
       // Update per-frame entrance parameters (avoid per-particle state updates)
       function updateEntranceFrame(nowMs){
         if (!ent.active) return;
-        if (ent.mode !== '1a' && ent.mode !== '2a') return;
+        if (ent.mode !== '2a') return;
 
         const t = nowMs - ent.startMs;
-        // Ensure the ①-a timeline finishes exactly at ENT1A_TOTAL
-        if (t >= ENT1A_TOTAL){
+        // Ensure the base curve finishes exactly at ENT2A_BASE_TOTAL
+        if (t >= ENT2A_BASE_TOTAL){
           ent._mInit = true;
           ent._mSmooth = 1;
           ent.mFrame = 1;
           ent._mLastMs = nowMs;
           return;
         }
-        const raw = ent1aProgress01(t);
+        const raw = ent2aBaseProgress01(t);
 
-        if (!(ENT1A_SMOOTH_TAU_MS > 0)){
+        if (!(ENT2A_SMOOTH_TAU_MS > 0)){
           ent.mFrame = raw;
           return;
         }
@@ -920,7 +959,7 @@
           return;
         }
 
-        const k = 1 - Math.exp(-dt / ENT1A_SMOOTH_TAU_MS);
+        const k = 1 - Math.exp(-dt / ENT2A_SMOOTH_TAU_MS);
         ent._mSmooth = ent._mSmooth + (raw - ent._mSmooth) * k;
         ent.mFrame = ent._mSmooth;
       }
@@ -930,21 +969,105 @@
         const t = nowMs - ent.startMs;
 
         if (ent.mode === '1a'){
-          // --- ①-a: "wrong-way" slip (mostly horizontal), then overshoot, then return ---
-          const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
           const a = pts[i];
+          const g = a.group; // 0:H, 1:M, 2::
+          const gcx = gTX[g] || (p.width*0.5);
+          const gcy = gTY[g] || (p.height*0.5);
 
-          // Segment-aware axis weighting:
-          // 0→-50 は「左右だけ伸びる」ニュアンスなので、Y方向の移動をかなり抑える
-          let mx = m, my = m;
-          if (t < ENT1A_T1){
-            my = m * 0.12;
+          // local index 0..1 within group
+          let start = 0, count = HN;
+          if (g === 1){ start = HN; count = MN; }
+          if (g === 2){ start = HN + MN; count = CN; }
+          const u01 = ((i - start) + 0.5) / Math.max(1, count); // 0..1
+          const band = u01 - 0.5; // -0.5..0.5
+
+          const minDim = Math.min(p.width, p.height);
+          const stretch = minDim * ENT1A_STRETCH_RATIO;
+          const thick   = minDim * ENT1A_THICKNESS_RATIO;
+          const shift   = minDim * ENT1A_CENTER_SHIFT_RATIO;
+
+          // timeline
+          const t0 = ENT1A_GATHER_MS;
+          const t1 = t0 + ENT1A_H_MS;
+          const t2 = t1 + ENT1A_V_MS;
+          const t3 = t2 + ENT1A_RECOIL_MS;
+
+          // small organic wobble while still "液体"
+          const tt = nowMs * 0.001;
+          const wob = (1 - clamp01(t / Math.max(1, ENT1A_TOTAL))) * 1.0;
+          const jx = Math.sin(tt*5.4 + a.r2*6.0) * thick * 0.22 * wob;
+          const jy = Math.cos(tt*4.7 + a.r0*5.0) * thick * 0.22 * wob;
+
+          // gather -> horizontal wrong stretch -> vertical stretch -> recoil -> bounce (digits)
+          if (t < t0){
+            const u = clamp01(t / t0);
+            const e = easeOutExpo(u);
+            const cx = gcx;
+            const cy = gcy;
+            // gather to group center (stay liquid)
+            const tx = cx + a.r0 * thick * 1.2;
+            const ty = cy + a.r1 * thick * 1.2;
+            return {x: a.sx + (tx - a.sx) * e + jx, y: a.sy + (ty - a.sy) * e + jy};
           }
 
-          return {
-            x: a.sx + (a.tx - a.sx) * mx,
-            y: a.sy + (a.ty - a.sy) * my
-          };
+          if (t < t1){
+            const u = clamp01((t - t0) / Math.max(1, ENT1A_H_MS));
+            const e = easeInOutQuad(u);
+            // one-sided horizontal smear
+            const cx = gcx - ent.dirX * shift * 0.55 * e;
+            const cy = gcy;
+            const ox = ent.dirX * (u01) * stretch * (0.85 + 0.15*e) + a.r0 * thick * 0.6;
+            const oy = (band*2.0 + a.r1*0.55) * thick;
+            return {x: cx + ox + jx, y: cy + oy + jy};
+          }
+
+          if (t < t2){
+            const u = clamp01((t - t1) / Math.max(1, ENT1A_V_MS));
+            const e = easeInOutQuad(u);
+            // one-sided vertical smear
+            const cx = gcx;
+            const cy = gcy - ent.dirY * shift * 0.55 * e;
+            const ox = (band*2.0 + a.r0*0.55) * thick;
+            const oy = ent.dirY * (u01) * stretch * (0.85 + 0.15*e) + a.r1 * thick * 0.6;
+            return {x: cx + ox + jx, y: cy + oy + jy};
+          }
+
+          if (t < t3){
+            // recoil: keep liquid, then only at the end blend to digits
+            const u = clamp01((t - t2) / Math.max(1, ENT1A_RECOIL_MS));
+            const e = easeInOutQuad(u);
+            const shrink = 1.0 - e;
+
+            // collapse the smear back near the group center
+            const cx = gcx;
+            const cy = gcy;
+            const ox = (band*2.0 + a.r0*0.65) * thick * (0.9 + 0.3*shrink);
+            const oy = ent.dirY * (u01) * stretch * shrink + a.r1 * thick * 0.35 * shrink;
+            const liquidX = cx + ox + jx;
+            const liquidY = cy + oy + jy;
+
+            let mix = 0;
+            if (u >= ENT1A_DIGIT_MIX_START){
+              mix = (u - ENT1A_DIGIT_MIX_START) / Math.max(1e-6, (1.0 - ENT1A_DIGIT_MIX_START));
+              mix = easeOutExpo(clamp01(mix));
+            }
+
+            return {
+              x: liquidX + (a.tx - liquidX) * mix,
+              y: liquidY + (a.ty - liquidY) * mix
+            };
+          }
+
+          // bounce on arrival (digits)
+          {
+            const u = clamp01((t - t3) / Math.max(1, ENT1A_BOUNCE_MS));
+            const decay = Math.pow(1 - u, 2.2);
+            const amp = minDim * 0.018 * decay;
+            const osc = Math.sin(u * Math.PI * 2 * 2.6);
+            const bx = (a.r0*0.65 + band*0.8) * amp * osc;
+            const by = (a.r1*0.65 - band*0.6) * amp * osc;
+            return {x: a.tx + bx, y: a.ty + by};
+          }
         }
 
         if (ent.mode === '2a'){
@@ -957,7 +1080,7 @@
             const e = easeOutCirc(u);
             return {x: a.sx + (a.tx - a.sx) * e, y: a.sy + (a.ty - a.sy) * e};
           } else {
-            const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
+            const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent2aBaseProgress01(t);
             return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
           }
         }
@@ -989,127 +1112,12 @@
       }
 
       // ---------------- Rendering deformation ----------------
-      // When bouncing: droplet while moving / squashed at impact
+      // v0.2.6: 伸び表現は「粒子の移動」で作る（バッファ全体のスケール変形は行わない）
       function computeDeform(){
-        // default: identity
-        let angle = 0, sx = 1, sy = 1;
-        const nowMs = performance.now();
-
-        // ①-aの「100になった瞬間、プリンみたいにポヨン」を render-only で追加
-        if (phase === 'display' && ent.poyoStartMs && (nowMs - ent.poyoStartMs) < ENT1A_POYO_MS){
-          const dt = (nowMs - ent.poyoStartMs) * 0.001;
-          const decay = Math.exp(-dt * 5.5);
-          const w = Math.sin(dt * Math.PI * 2 * ENT1A_POYO_HZ);
-          const a = ENT1A_POYO_AMP * decay * w;
-          angle = 0;
-          sx = 1 + a;
-          sy = 1 - a * 0.85;
-          return {angle,sx,sy};
-        }
-
-        // ①-a: "伸びる" は粒子の移動で表現するため、描画側のストレッチ変形は無効化
-        // （到達直後のポヨンは上のブロックで適用される）
-        if (ent.mode === '1a') return {angle,sx,sy};
-
-        if (phase !== 'entrance') return {angle,sx,sy};
-
-        // ①-a: スクストの「横→縦→戻る」を “描画変形（全体の潰れ/伸び）” でも表現する
-        if (ent.active && ent.mode === '1a'){
-          const t = Math.max(0, nowMs - ent.startMs); // ms
-          const H_STRETCH = 1.95;   // 横に伸びる最大
-          const H_SQUASH  = 0.58;   // 縦に潰れる最大
-          const V_STRETCH = 1.95;   // 縦に伸びる最大
-          const V_SQUASH  = 0.58;   // 横に潰れる最大
-
-          if (t < ENT1A_T1){
-            // 0→-50（0.1s）：左右だけ伸びる（Yは潰れる）
-            const u = clamp01(t / ENT1A_T1);
-            const e = easeOutQuad(u);
-            sx = 1 + (H_STRETCH - 1) * e;
-            sy = 1 - (1 - H_SQUASH) * e;
-            angle = 0;
-            return {angle,sx,sy};
-          }
-
-          if (t < ENT1A_T1 + ENT1A_T2){
-            // -50→150（0.1s）：横伸び→縦伸びに素早く切り替え
-            const u = clamp01((t - ENT1A_T1) / ENT1A_T2); // 0..1
-            const e = u; // linear
-            const sx1 = H_STRETCH, sy1 = H_SQUASH;
-            const sx2 = V_SQUASH,  sy2 = V_STRETCH;
-            sx = sx1 + (sx2 - sx1) * e;
-            sy = sy1 + (sy2 - sy1) * e;
-            angle = 0;
-            return {angle,sx,sy};
-          }
-
-          // 150→100（0.8s）：反動で戻る（easeInExpoでゆっくり整う）
-          {
-            const u = clamp01((t - ENT1A_T1 - ENT1A_T2) / ENT1A_T3);
-            const e = easeInExpo(u);
-            // 縦伸び状態→1へ戻す
-            const sx0 = V_SQUASH, sy0 = V_STRETCH;
-            sx = sx0 + (1 - sx0) * e;
-            sy = sy0 + (1 - sy0) * e;
-            angle = 0;
-            return {angle,sx,sy};
-          }
-        }
-
-
-        if (ent.mode === '2b' || ent.mode === '2c' || ent.mode === '2d'){
-          const vx = ent.vX, vy = ent.vY;
-          const speed = Math.sqrt(vx*vx + vy*vy);
-          if (speed > 1e-3){
-            angle = Math.atan2(vy, vx);
-            const s = Math.min(1, speed / 1600); // normalize
-            const moveStretch = 1 + 0.42*s;
-            const moveSquash  = 1 - 0.28*s;
-
-            const imp = ent.impact01 || 0;
-            // impact: squash in moving direction, stretch perpendicular
-            const along = (1-imp)*moveStretch + imp*moveSquash;
-            const perp  = (1-imp)*moveSquash  + imp*moveStretch;
-
-            sx = along;
-            sy = perp;
-          }
-        } else {
-          if (!(ent.mode === '1a' || ent.mode === '2a')) return {angle,sx,sy};
-
-          // 1a / 2a: スクアッシュ&ストレッチ（ニュアンス：横→縦→戻り）
-          const t = nowMs - ent.startMs;
-          const lerp = (a,b,u)=> a + (b-a)*u;
-
-          // 横に伸びる（0→-50）
-          if (t < ENT1A_T1){
-            const u = clamp01(t / ENT1A_T1);
-            angle = 0;
-            sx = 1 + ENT1A_STRETCH * u;
-            sy = 1 - ENT1A_SQUASH  * u;
-          }
-          // 縦に伸びる（-50→150）
-          else if (t < ENT1A_T1 + ENT1A_T2){
-            const u = clamp01((t - ENT1A_T1) / ENT1A_T2);
-            angle = 0;
-            const sxA = 1 + ENT1A_STRETCH, syA = 1 - ENT1A_SQUASH;
-            const sxB = 1 - ENT1A_SQUASH,  syB = 1 + ENT1A_STRETCH;
-            sx = lerp(sxA, sxB, u);
-            sy = lerp(syA, syB, u);
-          }
-          // 戻りながら整える（150→100 / easeInExpo）
-          else {
-            const u = clamp01((t - (ENT1A_T1 + ENT1A_T2)) / ENT1A_T3);
-            const e = easeInExpo(u);
-            angle = 0;
-            const sxB = 1 - ENT1A_SQUASH,  syB = 1 + ENT1A_STRETCH;
-            sx = lerp(sxB, 1, e);
-            sy = lerp(syB, 1, e);
-          }
-        }
-        return {angle,sx,sy};
+        return {angle:0, sx:1, sy:1};
       }
-function drawSlime(){
+
+      function drawSlime(){
         if (!gBlob) return;
 
         // 画面サイズの変化に応じて、描画パラメータを常に最新にする
@@ -1120,22 +1128,6 @@ function drawSlime(){
         gBlob.background(0);
         gBlob.blendMode(gBlob.ADD);
         gBlob.noStroke();
-
-        // global deformation (entrance / pudding bounce) — applied to the whole blob render
-        const def = computeDeform();
-        const useDef = (Math.abs(def.sx - 1) + Math.abs(def.sy - 1) + Math.abs(def.angle)) > 1e-4;
-
-        // draw main particles under deformation so v0.1.17 style stays (circles+blur+threshold), only the "world" squishes
-        gBlob.push();
-        if (useDef){
-          const cx = (p.width * 0.5) / blobScale;
-          const cy = (p.height * 0.5) / blobScale;
-          gBlob.translate(cx, cy);
-          if (def.angle) gBlob.rotate(def.angle);
-          gBlob.scale(def.sx, def.sy);
-          gBlob.translate(-cx, -cy);
-        }
-
         const r = DISC_RADIUS;
         const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
         // Colon second-tick (":")
@@ -1211,14 +1203,13 @@ function drawSlime(){
           gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
         }
 
-        gBlob.pop(); // end deformation layer
-
         const gr = Math.max(2, Math.floor(GUIDE_RADIUS));
         const GUIDE_STRIDE = 4, GUIDE_ALPHA = 8;
         gBlob.fill(255, GUIDE_ALPHA);
         for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){ const t=guides[gi]; gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2); }
 
         gBlob.pop();
+
         try { gBlob.filter(p.BLUR, BLUR_AMOUNT); } catch(e){}
         try { gBlob.filter(p.THRESHOLD, THRESH_LEVEL); } catch(e){ gBlob.filter(p.THRESHOLD); }
         p.image(gBlob, 0, 0, p.width, p.height);
@@ -1272,10 +1263,6 @@ function drawSlime(){
         if (phase === 'entrance' && ent.active){
           const t = nowMs - ent.startMs;
           if (t >= ent.durationMs){
-            // ①-a/②-a: 到達した瞬間に“プリンぽよん”を開始（render-only）
-            if (ent.mode === '1a' || ent.mode === '2a'){
-              ent.poyoStartMs = nowMs;
-            }
             ent.active = false;
             phase = 'display';
             ent._randWalls = null;
@@ -1305,72 +1292,6 @@ function drawSlime(){
             // slack: float
             a.vx = (a.vx + (Math.random()-0.5)*IDLE_JITTER) * 0.98;
             a.vy = (a.vy + (Math.random()-0.5)*IDLE_JITTER) * 0.98;
-          } else if (phase === 'entrance' && ent.active && ent.mode === '1a'){
-            // ①-a: 「伸びる」は “描画スケール” ではなく、粒子が横/縦に移動して
-            // 結果として液体が伸びたように見せる（数字ターゲット tx/ty はポヨン開始まで追わない）
-            const t = nowMs - ent.startMs;
-
-            const cx = p.width * 0.5;
-            const cy = p.height * 0.5;
-            const minDim = Math.min(p.width, p.height);
-
-            const R = minDim * 0.26;
-            const amp = minDim * 0.24; // outward reach (px)
-
-            const dx0 = a.sx - cx;
-            const dy0 = a.sy - cy;
-            const sgnX = (dx0 >= 0) ? 1 : -1;
-            const sgnY = (dy0 >= 0) ? 1 : -1;
-
-            // diamond-ish weighting: stronger outward when closer to the axis
-            const wForH = 1 - clamp01(Math.abs(dy0) / (R * 0.95));
-            const wForV = 1 - clamp01(Math.abs(dx0) / (R * 0.95));
-
-            let desiredX = a.x;
-            let desiredY = a.y;
-
-            if (t < ENT1A_T1){
-              // 横に間違って伸びる（0→-50 / 0.1s）
-              const out = amp * (0.40 + 0.60 * wForH);
-              desiredX = a.sx + sgnX * out;
-              // “横だけ伸びる”感：Yを少し中心へ寄せる（粒子も動いて伸びたように見せる）
-              desiredY = cy + (a.sy - cy) * 0.35;
-
-            } else if (t < ENT1A_T1 + ENT1A_T2){
-              // 縦に伸びる（-50→150 / 0.1s）
-              const out = amp * (0.40 + 0.60 * wForV);
-              desiredY = a.sy + sgnY * out;
-              desiredX = cx + (a.sx - cx) * 0.35;
-
-            } else {
-              // 反動で戻る（150→100 / 0.8s easeInExpo）※まだ数字ターゲットには吸着しない
-              const u = clamp01((t - (ENT1A_T1 + ENT1A_T2)) / ENT1A_T3);
-              const e = easeInExpo(u);
-
-              const out = amp * (0.40 + 0.60 * wForV);
-              const yStretched = a.sy + sgnY * out;
-              const xStretched = cx + (a.sx - cx) * 0.35;
-
-              desiredX = xStretched + (a.sx - xStretched) * e;
-              desiredY = yStretched + (a.sy - yStretched) * e;
-            }
-
-            // ランダムに “液体っぽく” 動かしつつ、上の desired に引っ張る
-            const jitter = IDLE_JITTER * 1.55;
-            a.vx = (a.vx + (Math.random()-0.5)*jitter) * 0.985;
-            a.vy = (a.vy + (Math.random()-0.5)*jitter) * 0.985;
-
-            // 0.2秒は強めに形を作る
-            const mult = (t < (ENT1A_T1 + ENT1A_T2)) ? 2.6 : 1.9;
-            const ddx = desiredX - a.x;
-            const ddy = desiredY - a.y;
-            a.vx = (a.vx + ddx * SEEK_STRENGTH * mult) * (DAMP + 0.06);
-            a.vy = (a.vy + ddy * SEEK_STRENGTH * mult) * (DAMP + 0.06);
-
-            // gentle center pull so it doesn't drift out of frame
-            const pull = 0.00075;
-            a.vx += (cx - a.x) * pull;
-            a.vy += (cy - a.y) * pull;
           } else {
             let targetX = a.tx;
             let targetY = a.ty;
@@ -1404,15 +1325,22 @@ function drawSlime(){
             const dx = (targetX + wobbleX) - a.x;
             const dy = (targetY + wobbleY) - a.y;
 
-            // Snap-in assist right after ①-a finishes: digits should "appear" mainly on the final pudding bounce.
             let mult = (phase === 'entrance') ? ENTRANCE_SEEK_MULT : 1.0;
-            if (phase === 'display' && ent.poyoStartMs){
-              const dt = nowMs - ent.poyoStartMs;
-              if (dt >= 0 && dt < 260) mult = 1.55;
+            let damp = DAMP;
+
+            // ①-a は「液体感」を強める（数字に戻るのは最後）
+            if (phase === 'entrance' && ent.active && ent.mode === '1a'){
+              mult *= ENT1A_SEEK_MULT;
+              damp = ENT1A_DAMP;
+              const tt = clamp01((nowMs - ent.startMs) / Math.max(1, ent.durationMs));
+              const pre = clamp01((0.92 - tt) / 0.92); // 0.92以降は収束優先
+              const jit = ENT1A_EXTRA_JITTER * pre;
+              a.vx += (Math.random()-0.5) * jit;
+              a.vy += (Math.random()-0.5) * jit;
             }
 
-            a.vx = (a.vx + dx * SEEK_STRENGTH * mult) * DAMP;
-            a.vy = (a.vy + dy * SEEK_STRENGTH * mult) * DAMP;
+            a.vx = (a.vx + dx * SEEK_STRENGTH * mult) * damp;
+            a.vy = (a.vy + dy * SEEK_STRENGTH * mult) * damp;
           }
 
           a.x += a.vx;
