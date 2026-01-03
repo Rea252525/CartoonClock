@@ -734,10 +734,8 @@
         ent.prevCY = ent.centerY;
         ent.vX = 0; ent.vY = 0;
 
-        if (mode === '1a'){
-          ent.durationMs = ENT1A_TOTAL;
-        } else if (mode === '1a' || mode === '2a'){
-          // Legacy Tier3 catch-up (v0.0.0 "10秒以上")
+        if (mode === '1a' || mode === '2a'){
+          // Legacy Tier3 catch-up (v0.0.0 "10秒以上") — EXACT duration
           ent.durationMs = CATCHUP_MS;
           ent.mode = mode;
         } else if (mode === '2b' || mode === '2c' || mode === '2d'){
@@ -1027,16 +1025,10 @@
             sy = perp;
           }
         } else {
-          // 1a / 2a: slight squash near overshoot (m>1)
-          const nowMs = performance.now();
-          const t = nowMs - ent.startMs;
-          const m = ent.mode==='1a' ? ent1aProgress01(t) : ent1aProgress01(t);
-          const overs = Math.max(0, Math.min(1, (m - 1.0) / 0.5));
-          if (overs > 0){
-            angle = 0;
-            sx = 1 + 0.20*overs;
-            sy = 1 - 0.14*overs;
-          }
+          // 1a / 2a: legacy catch-up should have NO extra deformation (match v0.0.0)
+          angle = 0;
+          sx = 1;
+          sy = 1;
         }
         return {angle,sx,sy};
       }
