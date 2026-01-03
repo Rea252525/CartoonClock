@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.6';
+    const VERSION = 'v0.2.9';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -1147,12 +1147,13 @@
         try { gBlob.filter(p.THRESHOLD, THRESH_LEVEL); } catch(e){ gBlob.filter(p.THRESHOLD); }
         p.image(gBlob, 0, 0, p.width, p.height);
       }
-        const dtMs = Math.max(0, Math.min(120, nowMs - prevDrawMs));
-        prevDrawMs = nowMs;
 
       // ---------------- Main loop ----------------
       p.draw = function(){
         const nowMs = performance.now();
+        const dtMs = Math.max(0, Math.min(120, nowMs - prevDrawMs));
+        prevDrawMs = nowMs;
+
 
         // update detection
         if (cam.enabled && (p.frameCount % DETECT_EVERY_N_FRAMES === 0)) runDetection(nowMs);
