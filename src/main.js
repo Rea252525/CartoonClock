@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.7';
+    const VERSION = 'v0.2.0';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -22,10 +22,6 @@
     // Entrance feels a bit stronger so it "snaps" into place
     const ENTRANCE_SEEK_MULT = 1.18;
 
-    // Entrance ①-a (スクアッシュ&ストレッチ) を“なめらか”にするためのm低域フィルタ
-    // 0で無効（そのままのキレ）
-    const ENT1A_SMOOTH_TAU_MS = 70;
-
     // Face detection
     const DETECT_EVERY_N_FRAMES = 6;
     const SEEN_DEBOUNCE_MS = 1200;
@@ -36,45 +32,26 @@
     const WOBBLE_JITTER_HZ = 16.24;
 
     // --- SLIME renderer params (guided) ---
-    // NOTE:
-    // 画面が小さいと「太りすぎて潰れる」/ 画面が大きいと「途切れ途切れになる」問題は、
-    // DISC_RADIUS / BLUR / THRESH が“固定値”だったのが主因。
-    // ここでは「数字(レイアウト)スケール」と「slimeバッファ解像度(blobScale)」に合わせて
-    // 毎フレーム自動で最適化するように変更しています（v0.1.13）。
-    const MAX_BLOB_PIXELS = 1800000;       // slimeバッファの上限（小さすぎると荒れる / 大きすぎると重い）
-    const MAX_SAMPLE_PARTICLES = 1600;     // (未使用だが互換のため残す)
+    const MAX_BLOB_PIXELS = 1800000;
 
-    // --- Base (design @ 1920x1080, blobScale≈2) ---
-    const DISC_RADIUS_BASE = 11.5;         // gBlob上の半径（基準）
+    const DISC_RADIUS_BASE = 11.5;
     const BLUR_BASE = 2.5;
     const THRESH_BASE = 0.70;
 
-    // --- Appearance tuning (v0.1.17) ---
-    // Make GitHub Pages and local rendering closer.
-    const SEEN_VIS_THICK_MULT = 1.18;      // thickness multiplier when seen
-    const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT; // keep same to avoid thickness jump    // thickness multiplier when unseen
-    const UNSEEN_THR_BIAS = -0.12;         // lower threshold when unseen (helps blobs survive)         // lower threshold when unseen
+    const SEEN_VIS_THICK_MULT = 1.18;
+    const UNSEEN_VIS_THICK_MULT = SEEN_VIS_THICK_MULT;
+    const UNSEEN_THR_BIAS = -0.12;
 
-    const BASE_ALPHA_SEEN = 26;            // ink amount when seen
-    const BASE_ALPHA_UNSEEN = 38;          // ink amount when unseen          // ink amount when unseen
-
-    // --- Responsive runtime params (updated in updateSlimeParams) ---
-    let DISC_RADIUS = DISC_RADIUS_BASE;
-    let BLUR_AMOUNT = BLUR_BASE;
-    let THRESH_LEVEL = THRESH_BASE;
-    let GUIDE_RADIUS = Math.floor(DISC_RADIUS_BASE * 0.75);
-
-    const USE_GUIDE = true;               // draw faint target guides when seen
-    const GUIDE_ALPHA = 6;                // 0..255 faint
-    const GUIDE_STRIDE = 2;               // use every n-th target
+    const BASE_ALPHA_SEEN = 26;
+    const BASE_ALPHA_UNSEEN = 38;
 
     // Font
     const USE_FONT = true;
     const FONT_FAMILY_PRIMARY = 'Inter';
     const FONT_FAMILY_LOCAL   = 'ClockFontLocal';
-    let FONT_WEIGHT = 100;
-    const LETTER_SPACING = 0.02;
-    let fontSize = 280;
+    let FONT_WEIGHT = 700;
+    let fontSize = 480;
+    let LETTER_SPACING = -0.02;
 
     // -------------- Easings (from https://easings.net/ja) --------------
     const clamp01 = (t)=> (t<0?0:(t>1?1:t));
@@ -113,22 +90,10 @@
     const RECENT_SEEN_MS = 4000;
 
     // ①-a timeline (ms)
-    const ENT1A_T1 = 100;
-    const ENT1A_T2 = 100;
-    const ENT1A_T3 = 800;
+    const ENT1A_T1 = 160;
+    const ENT1A_T2 = 420;
+    const ENT1A_T3 = 280;
     const ENT1A_TOTAL = ENT1A_T1 + ENT1A_T2 + ENT1A_T3;
-
-    // ①-a deformation tuning (visual squish & stretch)
-    // 0→-50 : 横に“間違って”伸びる（左右の頂点がふち側へ）
-    // -50→150 : 縦に伸びる（上下の頂点がふち側へ）
-    // 150→100 : 戻りながら整える
-    const ENT1A_STRETCH = 0.85; // max +scale (e.g. 1.85)
-    const ENT1A_SQUASH  = 0.35; // max -scale (e.g. 0.65)
-
-    // ①-a settle "pudding" wobble after reaching 100
-    const ENT1A_POYO_MS  = 650; // duration after entrance ends
-    const ENT1A_POYO_HZ  = 6.5; // wobble frequency
-    const ENT1A_POYO_AMP = 0.16; // scale delta amplitude (render-only)
 
     // ②-a delayed subset
     const ENT2A_DELAY_MS = 500;
@@ -148,15 +113,7 @@
       }));
 
       // Visual smoothing: avoid thickness jump on seen/unseen
-      // `seen` is the effective seen state used by the simulation.
-      // `simSeen` reflects the UI checkbox state (when camera is not enabled).
-      let simSeen = true;
       let seen = true, prevSeen = true;
-
-      // Manual test override: allow entrance test buttons to run even when
-      // "見られている（シミュレーション）" is OFF and no face is detected.
-      // When active, we treat the system as "seen" until this timestamp.
-      let manualSeenUntil = 0;
       let seenVis01 = 1.0;
       const SEEN_VIS_LERP_IN = 0.25;
       const SEEN_VIS_LERP_OUT = 0.07;
@@ -186,11 +143,6 @@
         vX:0, vY:0,
         mix01:0,
         impact01:0,
-        // m smoothing (for ①-a / ②-a non-delayed part)
-        mFrame:0,
-        _mSmooth:0,
-        _mInit:false,
-        _mLastMs:0,
       };
 
       // Camera state
@@ -232,18 +184,15 @@
       }
 
       if (fakeSeen){
-        fakeSeen.addEventListener('change', ()=>{ simSeen = !!fakeSeen.checked; });
-        simSeen = !!fakeSeen.checked;
+        fakeSeen.addEventListener('change', ()=>{ seen = !!fakeSeen.checked; });
+        seen = !!fakeSeen.checked;
       }
 
       if (btnSim){
         btnSim.addEventListener('click', ()=>{
           cam.enabled = false;
           if (cam.wrap) cam.wrap.style.display = 'none';
-          simSeen = true;
           seen = true;
-          prevSeen = true;
-          manualSeenUntil = 0;
           if (fakeSeen) fakeSeen.checked = true;
           logDiag('診断: シミュレーション ON');
         });
@@ -265,27 +214,14 @@
       }
 
       // --- Test buttons ---
-      function entranceDurationMsFor(mode){
-        if (mode === '1a') return ENT1A_TOTAL;
-        if (mode === '2a') return ENT2A_TOTAL;
-        if (mode === '2b' || mode === '2c' || mode === '2d') return Math.floor(BOUNCE_TOTAL * 1000);
-        return ENT1A_TOTAL;
-      }
-
-      // Allow test buttons to run even if simulation is OFF and no face is detected.
-      // We temporarily treat the system as "seen" for a short window.
-      function forceSeenForTest(durationMs){
-        const now = performance.now();
-        manualSeenUntil = Math.max(manualSeenUntil, now + Math.max(0, durationMs|0));
-        // Prevent the normal "rising edge" handler from starting a random entrance on the next frame.
+      function ensureSimSeen(){
+        if (cam.enabled) return;
+        if (fakeSeen){ fakeSeen.checked = true; }
         seen = true;
-        prevSeen = true;
       }
-
       function manualStart(mode){
-        const dur = entranceDurationMsFor(mode) + 1200; // + a bit of display time
-        forceSeenForTest(dur);
-        startEntrance(mode, performance.now());
+        ensureSimSeen();
+        startEntrance(mode);
       }
       if (btnEnt1a) btnEnt1a.addEventListener('click', ()=>manualStart('1a'));
       if (btnEnt2a) btnEnt2a.addEventListener('click', ()=>manualStart('2a'));
@@ -293,11 +229,11 @@
       if (btnEnt2c) btnEnt2c.addEventListener('click', ()=>manualStart('2c'));
       if (btnEnt2d) btnEnt2d.addEventListener('click', ()=>manualStart('2d'));
       if (btnEntAuto) btnEntAuto.addEventListener('click', ()=>{
-        forceSeenForTest(Math.floor(BOUNCE_TOTAL * 1000) + 1200);
+        ensureSimSeen();
+        // simulate "recent" or "long" by clicking twice if needed (not required)
         startEntranceAuto(performance.now());
       });
       if (btnToSlack) btnToSlack.addEventListener('click', ()=>{
-        manualSeenUntil = 0;
         setSlack(performance.now(), true);
       });
 
@@ -319,35 +255,26 @@
       let guides = [];
 
       function updateSlimeParams(){
-        // 数字の見た目サイズ（レイアウトスケール×重なり回避スケール）
         const s = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
         const bs = Math.max(1, blobScale || 2);
 
-        // 基準(1080p付近 / blobScale≈2)での「画面上の半径」をベースに、数字サイズに比例させる
-        // 画面上の半径 ≈ DISC_RADIUS(gBlob) * blobScale
-        const baseVisR = DISC_RADIUS_BASE * 2;       // approx on-screen radius when blobScale=2
-
+        const baseVisR = DISC_RADIUS_BASE * 2;
         const visMult = (SEEN_VIS_THICK_MULT * seenVis01) + (UNSEEN_VIS_THICK_MULT * (1.0 - seenVis01));
-        const desiredVisR = baseVisR * s * visMult; // scale with digit size and state
+        const desiredVisR = baseVisR * s * visMult;
 
-
-        // gBlob上の半径に戻す（blobScaleが上がっても二重に太らないようにする）
         let r = desiredVisR / bs;
-        r = Math.max(5.0, Math.min(18.0, r));        // 安定クランプ（極端な端末で破綻しにくく）
+        r = Math.max(5.0, Math.min(18.0, r));
         DISC_RADIUS = r;
 
-        // blur: 半径に比例（rが小さいときはぼかしも小さく）
         let blur = r * 0.22;
         blur = Math.max(1.2, Math.min(4.2, blur));
         BLUR_AMOUNT = blur;
 
-        // threshold: 大きいほど細く/切れやすい。大画面では少し下げて繋がりを優先。
         let thr = THRESH_BASE - (s - 1) * 0.06;
         thr += UNSEEN_THR_BIAS * (1.0 - seenVis01);
         thr = Math.max(0.52, Math.min(0.76, thr));
         THRESH_LEVEL = thr;
 
-        // guide
         GUIDE_RADIUS = Math.max(2, Math.floor(r * 0.55));
       }
 
@@ -542,10 +469,9 @@
         const HH = str.slice(0,2), MM = str.slice(2,4);
 
         let txH = [], txM = [], txColon = [];
-                const WEIGHT_HM = 700, WEIGHT_COLON = 100;
-        FONT_WEIGHT = WEIGHT_HM; fontSize = H_SIZE;  txH = buildTargetsFor(HH, HN, H_POS.x, H_POS.y);
-        FONT_WEIGHT = WEIGHT_HM; fontSize = M_SIZE;  txM = buildTargetsFor(MM, MN, M_POS.x, M_POS.y);
-        FONT_WEIGHT = WEIGHT_COLON; fontSize = COLON_SIZE; txColon = buildTargetsFor(':', CN, COLON_POS.x, COLON_POS.y);
+        FONT_WEIGHT = 900; fontSize = H_SIZE;  txH = buildTargetsFor(HH, HN, H_POS.x, H_POS.y);
+        FONT_WEIGHT = 900; fontSize = M_SIZE;  txM = buildTargetsFor(MM, MN, M_POS.x, M_POS.y);
+        FONT_WEIGHT = 700; fontSize = COLON_SIZE; txColon = buildTargetsFor(':', CN, COLON_POS.x, COLON_POS.y);
 
         function assign(start, count, targets){
           for (let i = 0; i < count; i++){
@@ -590,8 +516,6 @@
             logDiag('診断: Motion Fallback');
           }
           if (fakeSeen) fakeSeen.checked = false;
-          simSeen = false;
-          manualSeenUntil = 0;
         }catch(e){
           console.error(e);
           logDiag('診断: カメラ不可（権限/環境）');
@@ -661,12 +585,6 @@
         ent.active = true;
         ent.mode = mode;
         ent.startMs = nowMs;
-        // reset m smoothing state
-        ent._mInit = false;
-        ent._mSmooth = 0;
-        ent._mLastMs = nowMs;
-        ent.poyoStartMs = 0;
-        ent.mFrame = 0;
         ent._randWalls = null;
         ent.subsetMask = null;
         ent.offx = null;
@@ -746,23 +664,19 @@
       // ---------------- Entrance motion helpers ----------------
       function ent1aProgress01(tMs){
         // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
-        // Spec v0.2.7:
-        // 0→-50 : 0.1s (linear)
-        // -50→150 : 0.1s (linear)
-        // 150→100 : 0.8s (easeInExpo)
         if (tMs <= 0) return 0;
         if (tMs >= ENT1A_TOTAL) return 1;
 
         if (tMs < ENT1A_T1){
-          const u = clamp01(tMs / ENT1A_T1);
-          // linear (時間が短いのでイージングなし)
-          return 0 + (-0.5 - 0) * u;
+          const u = tMs / ENT1A_T1;
+          const e = easeOutExpo(u);
+          return 0 + (-0.5 - 0) * e;
         }
         tMs -= ENT1A_T1;
         if (tMs < ENT1A_T2){
-          const u = clamp01(tMs / ENT1A_T2);
-          // linear (時間が短いのでイージングなし)
-          return -0.5 + (1.5 - (-0.5)) * u;
+          const u = tMs / ENT1A_T2;
+          const e = easeInOutExpo(u);
+          return -0.5 + (1.5 - (-0.5)) * e;
         }
         tMs -= ENT1A_T2;
         const u = clamp01(tMs / ENT1A_T3);
@@ -887,63 +801,13 @@
         }
       }
 
-      // Update per-frame entrance parameters (avoid per-particle state updates)
-      function updateEntranceFrame(nowMs){
-        if (!ent.active) return;
-        if (ent.mode !== '1a' && ent.mode !== '2a') return;
-
-        const t = nowMs - ent.startMs;
-        // Ensure the ①-a timeline finishes exactly at ENT1A_TOTAL
-        if (t >= ENT1A_TOTAL){
-          ent._mInit = true;
-          ent._mSmooth = 1;
-          ent.mFrame = 1;
-          ent._mLastMs = nowMs;
-          return;
-        }
-        const raw = ent1aProgress01(t);
-
-        if (!(ENT1A_SMOOTH_TAU_MS > 0)){
-          ent.mFrame = raw;
-          return;
-        }
-
-        const last = ent._mLastMs || nowMs;
-        const dt = Math.min(50, Math.max(0, nowMs - last));
-        ent._mLastMs = nowMs;
-
-        if (!ent._mInit){
-          ent._mInit = true;
-          ent._mSmooth = raw;
-          ent.mFrame = raw;
-          return;
-        }
-
-        const k = 1 - Math.exp(-dt / ENT1A_SMOOTH_TAU_MS);
-        ent._mSmooth = ent._mSmooth + (raw - ent._mSmooth) * k;
-        ent.mFrame = ent._mSmooth;
-      }
-
-
       function computeEntranceDesired(i, nowMs){
         const t = nowMs - ent.startMs;
 
         if (ent.mode === '1a'){
-          // --- ①-a: "wrong-way" slip (mostly horizontal), then overshoot, then return ---
-          const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
+          const m = ent1aProgress01(t);
           const a = pts[i];
-
-          // Segment-aware axis weighting:
-          // 0→-50 は「左右だけ伸びる」ニュアンスなので、Y方向の移動をかなり抑える
-          let mx = m, my = m;
-          if (t < ENT1A_T1){
-            my = m * 0.12;
-          }
-
-          return {
-            x: a.sx + (a.tx - a.sx) * mx,
-            y: a.sy + (a.ty - a.sy) * my
-          };
+          return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
         }
 
         if (ent.mode === '2a'){
@@ -956,7 +820,7 @@
             const e = easeOutCirc(u);
             return {x: a.sx + (a.tx - a.sx) * e, y: a.sy + (a.ty - a.sy) * e};
           } else {
-            const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent1aProgress01(t);
+            const m = ent1aProgress01(t);
             return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
           }
         }
@@ -992,65 +856,8 @@
       function computeDeform(){
         // default: identity
         let angle = 0, sx = 1, sy = 1;
-        const nowMs = performance.now();
-
-        // ①-aの「100になった瞬間、プリンみたいにポヨン」を render-only で追加
-        if (phase === 'display' && ent.poyoStartMs && (nowMs - ent.poyoStartMs) < ENT1A_POYO_MS){
-          const dt = (nowMs - ent.poyoStartMs) * 0.001;
-          const decay = Math.exp(-dt * 5.5);
-          const w = Math.sin(dt * Math.PI * 2 * ENT1A_POYO_HZ);
-          const a = ENT1A_POYO_AMP * decay * w;
-          angle = 0;
-          sx = 1 + a;
-          sy = 1 - a * 0.85;
-          return {angle,sx,sy};
-        }
 
         if (phase !== 'entrance') return {angle,sx,sy};
-
-        // ①-a: スクストの「横→縦→戻る」を “描画変形（全体の潰れ/伸び）” でも表現する
-        if (ent.active && ent.mode === '1a'){
-          const t = Math.max(0, nowMs - ent.startMs); // ms
-          const H_STRETCH = 1.95;   // 横に伸びる最大
-          const H_SQUASH  = 0.58;   // 縦に潰れる最大
-          const V_STRETCH = 1.95;   // 縦に伸びる最大
-          const V_SQUASH  = 0.58;   // 横に潰れる最大
-
-          if (t < ENT1A_T1){
-            // 0→-50（0.1s）：左右だけ伸びる（Yは潰れる）
-            const u = clamp01(t / ENT1A_T1);
-            const e = easeOutQuad(u);
-            sx = 1 + (H_STRETCH - 1) * e;
-            sy = 1 - (1 - H_SQUASH) * e;
-            angle = 0;
-            return {angle,sx,sy};
-          }
-
-          if (t < ENT1A_T1 + ENT1A_T2){
-            // -50→150（0.1s）：横伸び→縦伸びに素早く切り替え
-            const u = clamp01((t - ENT1A_T1) / ENT1A_T2); // 0..1
-            const e = u; // linear
-            const sx1 = H_STRETCH, sy1 = H_SQUASH;
-            const sx2 = V_SQUASH,  sy2 = V_STRETCH;
-            sx = sx1 + (sx2 - sx1) * e;
-            sy = sy1 + (sy2 - sy1) * e;
-            angle = 0;
-            return {angle,sx,sy};
-          }
-
-          // 150→100（0.8s）：反動で戻る（easeInExpoでゆっくり整う）
-          {
-            const u = clamp01((t - ENT1A_T1 - ENT1A_T2) / ENT1A_T3);
-            const e = easeInExpo(u);
-            // 縦伸び状態→1へ戻す
-            const sx0 = V_SQUASH, sy0 = V_STRETCH;
-            sx = sx0 + (1 - sx0) * e;
-            sy = sy0 + (1 - sy0) * e;
-            angle = 0;
-            return {angle,sx,sy};
-          }
-        }
-
 
         if (ent.mode === '2b' || ent.mode === '2c' || ent.mode === '2d'){
           const vx = ent.vX, vy = ent.vY;
@@ -1070,114 +877,84 @@
             sy = perp;
           }
         } else {
-          if (!(ent.mode === '1a' || ent.mode === '2a')) return {angle,sx,sy};
-
-          // 1a / 2a: スクアッシュ&ストレッチ（ニュアンス：横→縦→戻り）
+          // 1a / 2a: slight squash near overshoot (m>1)
+          const nowMs = performance.now();
           const t = nowMs - ent.startMs;
-          const lerp = (a,b,u)=> a + (b-a)*u;
-
-          // 横に伸びる（0→-50）
-          if (t < ENT1A_T1){
-            const u = clamp01(t / ENT1A_T1);
+          const m = ent.mode==='1a' ? ent1aProgress01(t) : ent1aProgress01(t);
+          const overs = Math.max(0, Math.min(1, (m - 1.0) / 0.5));
+          if (overs > 0){
             angle = 0;
-            sx = 1 + ENT1A_STRETCH * u;
-            sy = 1 - ENT1A_SQUASH  * u;
-          }
-          // 縦に伸びる（-50→150）
-          else if (t < ENT1A_T1 + ENT1A_T2){
-            const u = clamp01((t - ENT1A_T1) / ENT1A_T2);
-            angle = 0;
-            const sxA = 1 + ENT1A_STRETCH, syA = 1 - ENT1A_SQUASH;
-            const sxB = 1 - ENT1A_SQUASH,  syB = 1 + ENT1A_STRETCH;
-            sx = lerp(sxA, sxB, u);
-            sy = lerp(syA, syB, u);
-          }
-          // 戻りながら整える（150→100 / easeInExpo）
-          else {
-            const u = clamp01((t - (ENT1A_T1 + ENT1A_T2)) / ENT1A_T3);
-            const e = easeInExpo(u);
-            angle = 0;
-            const sxB = 1 - ENT1A_SQUASH,  syB = 1 + ENT1A_STRETCH;
-            sx = lerp(sxB, 1, e);
-            sy = lerp(syB, 1, e);
+            sx = 1 + 0.20*overs;
+            sy = 1 - 0.14*overs;
           }
         }
         return {angle,sx,sy};
       }
-function drawSlime(){
+
+      function drawSlime(){
         if (!gBlob) return;
 
-        // 画面サイズの変化に応じて、描画パラメータを常に最新にする
         updateSlimeParams();
+
+        const deform = computeDeform();
+        const cx = p.width * 0.5;
+        const cy = p.height * 0.5;
 
         gBlob.push();
         gBlob.blendMode(gBlob.BLEND);
         gBlob.background(0);
         gBlob.blendMode(gBlob.ADD);
         gBlob.noStroke();
-
-        // global deformation (entrance / pudding bounce) — applied to the whole blob render
-        const def = computeDeform();
-        const useDef = (Math.abs(def.sx - 1) + Math.abs(def.sy - 1) + Math.abs(def.angle)) > 1e-4;
-
-        // draw main particles under deformation so v0.1.17 style stays (circles+blur+threshold), only the "world" squishes
+        // __DEFORM_APPLIED__
+        const __def = (typeof computeDeform === 'function') ? computeDeform() : {angle:0,sx:1,sy:1};
+        const __cx = (p.width || DESIGN_W) * 0.5;
+        const __cy = (p.height || DESIGN_H) * 0.5370370; // digits baseline center (design-aligned)
         gBlob.push();
-        if (useDef){
-          const cx = (p.width * 0.5) / blobScale;
-          const cy = (p.height * 0.5) / blobScale;
-          gBlob.translate(cx, cy);
-          if (def.angle) gBlob.rotate(def.angle);
-          gBlob.scale(def.sx, def.sy);
-          gBlob.translate(-cx, -cy);
-        }
+        gBlob.translate(__cx, __cy);
+        gBlob.rotate(__def.angle || 0);
+        gBlob.scale(__def.sx || 1, __def.sy || 1);
+        gBlob.rotate(-(__def.angle || 0));
+        gBlob.translate(-__cx, -__cy);
+
+
+        // Apply deform around screen center
+        gBlob.translate((cx)/blobScale, (cy)/blobScale);
+        gBlob.rotate(deform.angle);
+        gBlob.scale(deform.sx, deform.sy);
+        gBlob.translate((-cx)/blobScale, (-cy)/blobScale);
 
         const r = DISC_RADIUS;
         const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
-        // Colon second-tick (":")
+
+        // ":" tick (keep simple – constant thickness when unseen)
         const now = new Date();
         const sec = now.getSeconds();
         const ms = now.getMilliseconds();
-        const u = ms / 1000; // 0..1 within this second
-
-        // 細くなる最小スケール（かなり細め）
+        const u = ms / 1000;
         const COLON_THIN_SCALE = 0.28;
-
-        let colonScale;
-        if (!seen){
-          // 見られていないときはコロンの太さは一定（変化させない）
-          colonScale = 1.0;
-        } else {
-          // 偶数秒: 細い→太い（イーズアウト）
-          // 奇数秒: 太い→細い（イーズアウト）
-          const easeOut = 1 - Math.pow(1 - u, 5); // easeOutQuint に変更（https://easings.net/ja より）
-          if (sec % 2 === 0){
-            // even second → 太い側へ寄る
-            colonScale = COLON_THIN_SCALE + (1 - COLON_THIN_SCALE) * easeOut;
-          } else {
-            // odd second → 細い側へ寄る
-            colonScale = 1 - (1 - COLON_THIN_SCALE) * easeOut;
-          }
+        let colonScale = 1.0;
+        if (seen){
+          const easeOut = 1 - Math.pow(1 - u, 5); // easeOutQuint
+          colonScale = (sec % 2 === 0)
+            ? (COLON_THIN_SCALE + (1 - COLON_THIN_SCALE) * easeOut)
+            : (1 - (1 - COLON_THIN_SCALE) * easeOut);
         }
-
         const colonR = r * colonScale;
-        const colonAlpha = BASE_ALPHA;
 
         const OUTLINE_SCALE = 1.55;
-        // 小さい画面ではアウトライン加算を少し弱めて「太り」を抑える
         const sEff = Math.max(0.35, (layoutScale || 1) * (DIGIT_SCALE || 1));
         const OUTLINE_ALPHA = BASE_ALPHA * 0.40 * Math.min(1.0, Math.max(0.65, sEff));
 
-        // 画面サイズに応じて密度を調整（小さい画面ほど間引いて真っ白にならないようにする）
+        // Density tuning on small screens
         const BASE_AREA = DESIGN_W * DESIGN_H;
         const area = Math.max(1, p.width * p.height);
         let densityScale = 1.0;
         if (area < BASE_AREA){
           const tArea = BASE_AREA / area;
-          const AREA_DENSITY_POW = 0.7; // 調整用：0.5〜1.0くらいで好みを探る
-          densityScale = Math.min(3.0, Math.pow(tArea, AREA_DENSITY_POW)); // 1〜約3倍まで
+          const AREA_DENSITY_POW = 0.7;
+          densityScale = Math.min(3.0, Math.pow(tArea, AREA_DENSITY_POW));
         }
 
-        // サンプリングの目標数（B_*）に densityScale を掛けることで、小さい画面では粒を間引く
         const B_H_BASE = 1400, B_M_BASE = 1400, B_S_BASE = 120, B_C_BASE = 90;
         const B_H = B_H_BASE * densityScale;
         const B_M = B_M_BASE * densityScale;
@@ -1192,28 +969,27 @@ function drawSlime(){
         for (let i=0;i<HN;i+=sH){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
         for (let i=HN;i<HN+MN;i+=sM){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
         for (let i=HN+MN;i<HN+MN+SN;i+=sS){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
-        for (let i=HN+MN+SN;i<N;i+=sC){ const a=pts[i]; gBlob.fill(255, colonAlpha); gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2); }
-        
-        // Extra wide, faint pass just for H & M to smooth their outlines
-        for (let i=0;i<HN;i+=sH){
-          const a = pts[i];
-          gBlob.fill(255, OUTLINE_ALPHA);
-          gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
-        }
-        for (let i=HN;i<HN+MN;i+=sM){
-          const a = pts[i];
-          gBlob.fill(255, OUTLINE_ALPHA);
-          gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
-        }
+        for (let i=HN+MN+SN;i<N;i+=sC){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2); }
 
-        gBlob.pop(); // end deformation layer
+        // Outline smoothing pass for H & M
+        for (let i=0;i<HN;i+=sH){ const a=pts[i]; gBlob.fill(255, OUTLINE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2); }
+        for (let i=HN;i<HN+MN;i+=sM){ const a=pts[i]; gBlob.fill(255, OUTLINE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2); }
 
+        // faint guides (useful while tuning)
         const gr = Math.max(2, Math.floor(GUIDE_RADIUS));
-        const GUIDE_STRIDE = 4, GUIDE_ALPHA = 8;
-        gBlob.fill(255, GUIDE_ALPHA);
-        for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){ const t=guides[gi]; gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2); }
+        const GUIDE_STRIDE = 4;
+        const GUIDE_ALPHA = 8;
+        if (guides && guides.length){
+          gBlob.fill(255, GUIDE_ALPHA);
+          for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){
+            const t = guides[gi];
+            gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2);
+          }
+        }
 
         gBlob.pop();
+        gBlob.pop(); // __DEFORM_APPLIED__ end
+
         try { gBlob.filter(p.BLUR, BLUR_AMOUNT); } catch(e){}
         try { gBlob.filter(p.THRESHOLD, THRESH_LEVEL); } catch(e){ gBlob.filter(p.THRESHOLD); }
         p.image(gBlob, 0, 0, p.width, p.height);
@@ -1227,8 +1003,7 @@ function drawSlime(){
         if (cam.enabled && (p.frameCount % DETECT_EVERY_N_FRAMES === 0)) runDetection(nowMs);
 
         const camSeen = cam.enabled ? (nowMs - cam.lastSeenAt <= SEEN_DEBOUNCE_MS) : false;
-        const manualSeen = (nowMs < manualSeenUntil);
-        const effectiveSeen = (cam.enabled ? camSeen : !!simSeen) || manualSeen;
+        const effectiveSeen = cam.enabled ? camSeen : !!seen;
         seen = effectiveSeen;
 
         // smooth visuals
@@ -1258,19 +1033,10 @@ function drawSlime(){
         }
         prevSeen = seen;
 
-        // precompute entrance frame values (smooth m)
-        if (phase === 'entrance' && ent.active){
-          updateEntranceFrame(nowMs);
-        }
-
         // advance entrance end
         if (phase === 'entrance' && ent.active){
           const t = nowMs - ent.startMs;
           if (t >= ent.durationMs){
-            // ①-a/②-a: 到達した瞬間に“プリンぽよん”を開始（render-only）
-            if (ent.mode === '1a' || ent.mode === '2a'){
-              ent.poyoStartMs = nowMs;
-            }
             ent.active = false;
             phase = 'display';
             ent._randWalls = null;
@@ -1317,18 +1083,12 @@ function drawSlime(){
               wobbleGain = Math.max(0, (tt - 0.65) / 0.35);
             }
 
-	            const baseHz = WOBBLE_BASE_HZ;
-            const jitterAmp = WOBBLE_JITTER_HZ;
-	            // NOTE: avoid shadowing the global state variable `phase`
-	            const phi = i * 0.37;
-            const h = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
-            const frac = h - Math.floor(h);
-            const j = (frac - 0.5) * 2.0;
-            const freqX = baseHz + j * jitterAmp * 0.15;
-            const freqY = baseHz * 1.3 + j * jitterAmp * 0.11;
+            const phaseRand = i * 12.9898;
+            const freqX = (WOBBLE_BASE_HZ + (Math.sin(i*0.123)+1)*0.5*WOBBLE_JITTER_HZ);
+            const freqY = (WOBBLE_BASE_HZ + (Math.cos(i*0.097)+1)*0.5*WOBBLE_JITTER_HZ);
 
-	            const wobbleX = Math.sin(tSec * freqX + phi) * SEEN_WOBBLE * wobbleGain;
-	            const wobbleY = Math.cos(tSec * freqY + phi * 1.7) * SEEN_WOBBLE * wobbleGain;
+            const wobbleX = Math.sin(tSec*freqX + phaseRand) * SEEN_WOBBLE * wobbleGain;
+            const wobbleY = Math.cos(tSec*freqY + phaseRand*1.7) * SEEN_WOBBLE * wobbleGain;
 
             const dx = (targetX + wobbleX) - a.x;
             const dy = (targetY + wobbleY) - a.y;
