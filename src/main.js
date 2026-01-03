@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.8';
+    const VERSION = 'v0.2.9';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -1007,6 +1007,10 @@
           return {angle,sx,sy};
         }
 
+        // ①-a: "伸びる" は粒子の移動で表現するため、描画側のストレッチ変形は無効化
+        // （到達直後のポヨンは上のブロックで適用される）
+        if (ent.mode === '1a') return {angle,sx,sy};
+
         if (phase !== 'entrance') return {angle,sx,sy};
 
         // ①-a: スクストの「横→縦→戻る」を “描画変形（全体の潰れ/伸び）” でも表現する
@@ -1302,17 +1306,69 @@ function drawSlime(){
             a.vx = (a.vx + (Math.random()-0.5)*IDLE_JITTER) * 0.98;
             a.vy = (a.vy + (Math.random()-0.5)*IDLE_JITTER) * 0.98;
           } else if (phase === 'entrance' && ent.active && ent.mode === '1a'){
-            // ①-a: keep a "liquid" / random feel until the rebound finishes.
-            // We intentionally DO NOT chase digit targets during the stretch/squash.
-            // The shape change is expressed via computeDeform() at render time.
-            const jitter = IDLE_JITTER * 1.25;
+            // ①-a: 「伸びる」は “描画スケール” ではなく、粒子が横/縦に移動して
+            // 結果として液体が伸びたように見せる（数字ターゲット tx/ty はポヨン開始まで追わない）
+            const t = nowMs - ent.startMs;
+
+            const cx = p.width * 0.5;
+            const cy = p.height * 0.5;
+            const minDim = Math.min(p.width, p.height);
+
+            const R = minDim * 0.26;
+            const amp = minDim * 0.24; // outward reach (px)
+
+            const dx0 = a.sx - cx;
+            const dy0 = a.sy - cy;
+            const sgnX = (dx0 >= 0) ? 1 : -1;
+            const sgnY = (dy0 >= 0) ? 1 : -1;
+
+            // diamond-ish weighting: stronger outward when closer to the axis
+            const wForH = 1 - clamp01(Math.abs(dy0) / (R * 0.95));
+            const wForV = 1 - clamp01(Math.abs(dx0) / (R * 0.95));
+
+            let desiredX = a.x;
+            let desiredY = a.y;
+
+            if (t < ENT1A_T1){
+              // 横に間違って伸びる（0→-50 / 0.1s）
+              const out = amp * (0.40 + 0.60 * wForH);
+              desiredX = a.sx + sgnX * out;
+              // “横だけ伸びる”感：Yを少し中心へ寄せる（粒子も動いて伸びたように見せる）
+              desiredY = cy + (a.sy - cy) * 0.35;
+
+            } else if (t < ENT1A_T1 + ENT1A_T2){
+              // 縦に伸びる（-50→150 / 0.1s）
+              const out = amp * (0.40 + 0.60 * wForV);
+              desiredY = a.sy + sgnY * out;
+              desiredX = cx + (a.sx - cx) * 0.35;
+
+            } else {
+              // 反動で戻る（150→100 / 0.8s easeInExpo）※まだ数字ターゲットには吸着しない
+              const u = clamp01((t - (ENT1A_T1 + ENT1A_T2)) / ENT1A_T3);
+              const e = easeInExpo(u);
+
+              const out = amp * (0.40 + 0.60 * wForV);
+              const yStretched = a.sy + sgnY * out;
+              const xStretched = cx + (a.sx - cx) * 0.35;
+
+              desiredX = xStretched + (a.sx - xStretched) * e;
+              desiredY = yStretched + (a.sy - yStretched) * e;
+            }
+
+            // ランダムに “液体っぽく” 動かしつつ、上の desired に引っ張る
+            const jitter = IDLE_JITTER * 1.55;
             a.vx = (a.vx + (Math.random()-0.5)*jitter) * 0.985;
             a.vy = (a.vy + (Math.random()-0.5)*jitter) * 0.985;
 
-            // gentle center pull so the blob doesn't drift too far away
-            const cx = p.width * 0.5;
-            const cy = p.height * 0.5;
-            const pull = 0.00115;
+            // 0.2秒は強めに形を作る
+            const mult = (t < (ENT1A_T1 + ENT1A_T2)) ? 2.6 : 1.9;
+            const ddx = desiredX - a.x;
+            const ddy = desiredY - a.y;
+            a.vx = (a.vx + ddx * SEEK_STRENGTH * mult) * (DAMP + 0.06);
+            a.vy = (a.vy + ddy * SEEK_STRENGTH * mult) * (DAMP + 0.06);
+
+            // gentle center pull so it doesn't drift out of frame
+            const pull = 0.00075;
             a.vx += (cx - a.x) * pull;
             a.vy += (cy - a.y) * pull;
           } else {
