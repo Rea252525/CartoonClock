@@ -104,7 +104,12 @@
       return (t < 0.5) ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2;
     }
 
-    // ---------------- Entrance Specs ----------------
+    
+    function easeOutQuad(t){
+      t = clamp01(t);
+      return 1 - (1 - t) * (1 - t);
+    }
+// ---------------- Entrance Specs ----------------
     const RECENT_SEEN_MS = 4000;
 
     // ①-a timeline (ms)
