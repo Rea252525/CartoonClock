@@ -3,7 +3,7 @@
   'use strict';
 
   function boot(){
-    const VERSION = 'v0.2.9';
+    const VERSION = 'v0.2.10';
     console.log('[Saboclock]', VERSION);
 
     // ---------------- Config ----------------
@@ -21,10 +21,6 @@
 
     // Entrance feels a bit stronger so it "snaps" into place
     const ENTRANCE_SEEK_MULT = 1.18;
-
-    // Entrance ①-a (スクアッシュ&ストレッチ) を“なめらか”にするためのm低域フィルタ
-    // 0で無効（そのままのキレ）
-    const ENT1A_SMOOTH_TAU_MS = 70;
 
     // Face detection
     const DETECT_EVERY_N_FRAMES = 6;
@@ -141,7 +137,6 @@
       return 1 - (1 - t) * (1 - t);
     }
 
-
     // ---- Legacy (v0.0.0) param easings ----
     function easeOutExpoParam(t, steep, timePower){
       if (t <= 0) return 0;
@@ -178,16 +173,8 @@
 // ---------------- Entrance Specs ----------------
     const RECENT_SEEN_MS = 4000;
 
-    // ①-a timeline (ms)
-    const ENT1A_T1 = 100;
-    const ENT1A_T2 = 100;
-    const ENT1A_T3 = 800;
-    const ENT1A_TOTAL = ENT1A_T1 + ENT1A_T2 + ENT1A_T3;
-
-    // ②-a delayed subset
-    const ENT2A_DELAY_MS = 500;
-    const ENT2A_CATCH_MS = 700;
-    const ENT2A_TOTAL = Math.max(ENT1A_TOTAL, ENT2A_DELAY_MS + ENT2A_CATCH_MS);
+// ①-a / ②-a は v0.0.0 の「見られていない時間が10秒以上」の Tier3 キャッチアップ（CATCHUP_MS）を使用
+// ※ v0.2.5 で入れた「0.1s / 0.8s」等の時間指示は撤廃（カクつき要因になりやすいので残さない）
 
     // ②-b/c/d bounce timeline (seconds)
     const BOUNCE_DURS = [0.1,0.1,0.1, 0.2,0.2,0.2, 0.3,0.3,0.3, 0.3, 0.5]; // total ~2.6s
@@ -327,7 +314,7 @@
         if (mode === '1a') return CATCHUP_MS;
         if (mode === '2a') return CATCHUP_MS;
         if (mode === '2b' || mode === '2c' || mode === '2d') return Math.floor(BOUNCE_TOTAL * 1000);
-        return ENT1A_TOTAL;
+        return CATCHUP_MS;
       }
 
       // Allow test buttons to run even if simulation is OFF and no face is detected.
@@ -387,7 +374,6 @@
 
         const visMult = (SEEN_VIS_THICK_MULT * seenVis01) + (UNSEEN_VIS_THICK_MULT * (1.0 - seenVis01));
         const desiredVisR = baseVisR * s * visMult; // scale with digit size and state
-
 
         // gBlob上の半径に戻す（blobScaleが上がっても二重に太らないようにする）
         let r = desiredVisR / bs;
@@ -800,31 +786,7 @@
       }
 
       // ---------------- Entrance motion helpers ----------------
-      function ent1aProgress01(tMs){
-        // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
-        // Spec v0.2.5:
-        // 0→-50 : 0.1s (linear)
-        // -50→150 : 0.1s (linear)
-        // 150→100 : 0.8s (easeInExpo)
-        if (tMs <= 0) return 0;
-        if (tMs >= ENT1A_TOTAL) return 1;
-
-        if (tMs < ENT1A_T1){
-          const u = clamp01(tMs / ENT1A_T1);
-          // linear (時間が短いのでイージングなし)
-          return 0 + (-0.5 - 0) * u;
-        }
-        tMs -= ENT1A_T1;
-        if (tMs < ENT1A_T2){
-          const u = clamp01(tMs / ENT1A_T2);
-          // linear (時間が短いのでイージングなし)
-          return -0.5 + (1.5 - (-0.5)) * u;
-        }
-        tMs -= ENT1A_T2;
-        const u = clamp01(tMs / ENT1A_T3);
-        const e = easeInExpo(u);
-        return 1.5 + (1.0 - 1.5) * e;
-      }
+    
 
       function getBounceCenter(mode, tSec){
         const W = p.width, H = p.height;
@@ -967,7 +929,6 @@
         );
       }
 
-
       function computeEntranceDesired(i, nowMs){
         const t = nowMs - ent.startMs;
 
@@ -1037,8 +998,106 @@
         return {angle,sx,sy};
       }
 
+// --- Legacy slime rendering profile (match v0.0.0) ---
+// Used ONLY for ①-a / ②-a (Tier3 catch-up) to avoid outline stepping/flicker.
+function drawSlimeLegacyTier3(){
+  if (!gBlob) return;
+
+  gBlob.push();
+  gBlob.blendMode(gBlob.BLEND);
+  gBlob.background(0);
+  gBlob.blendMode(gBlob.ADD);
+  gBlob.noStroke();
+
+  // Keep the same transform pipeline (computeDeform is identity for 1a/2a).
+  const __def = (typeof computeDeform === 'function') ? computeDeform() : {angle:0,sx:1,sy:1};
+  const __cx = (p.width || DESIGN_W) * 0.5;
+  const __cy = (p.height || DESIGN_H) * 0.5370370; // digits baseline center (design-aligned)
+  gBlob.push();
+  gBlob.translate(__cx, __cy);
+  gBlob.rotate(__def.angle || 0);
+  gBlob.scale(__def.sx || 1, __def.sy || 1);
+  gBlob.rotate(-(__def.angle || 0));
+  gBlob.translate(-__cx, -__cy);
+
+  const r = 14;          // v0.0.0
+  const blur = 3;        // v0.0.0
+  const thr = 0.558;     // v0.0.0
+  const BASE_ALPHA = 22; // v0.0.0
+
+  // Colon second-tick (":") — same as v0.0.0
+  const now = new Date();
+  const sec = now.getSeconds();
+  const ms = now.getMilliseconds();
+  const u = ms / 1000;
+
+  const COLON_THIN_SCALE = 0.28;
+  let colonScale;
+  if (!seen){
+    colonScale = 1.0;
+  } else {
+    const easeOut = 1 - Math.pow(1 - u, 5); // easeOutQuint
+    if (sec % 2 === 0){
+      colonScale = COLON_THIN_SCALE + (1 - COLON_THIN_SCALE) * easeOut;
+    } else {
+      colonScale = 1 - (1 - COLON_THIN_SCALE) * easeOut;
+    }
+  }
+  const colonR = r * colonScale;
+  const colonAlpha = BASE_ALPHA;
+
+  const OUTLINE_SCALE = 1.45;              // v0.0.0
+  const OUTLINE_ALPHA = BASE_ALPHA * 0.35; // v0.0.0
+
+  const B_H = 1400, B_M = 1400, B_S = 120, B_C = 90;
+  const sH = Math.max(1, Math.floor(HN / B_H));
+  const sM = Math.max(1, Math.floor(MN / B_M));
+  const sS = Math.max(1, Math.floor(Math.max(1, SN) / B_S));
+  const sC = Math.max(1, Math.floor(CN / B_C));
+
+  for (let i=0;i<HN;i+=sH){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
+  for (let i=HN;i<HN+MN;i+=sM){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
+  for (let i=HN+MN;i<HN+MN+SN;i+=sS){ const a=pts[i]; gBlob.fill(255, BASE_ALPHA); gBlob.circle(a.x/blobScale, a.y/blobScale, r*2); }
+  for (let i=HN+MN+SN;i<N;i+=sC){ const a=pts[i]; gBlob.fill(255, colonAlpha); gBlob.circle(a.x/blobScale, a.y/blobScale, colonR*2); }
+
+  // Extra wide, faint pass just for H & M to smooth their outlines
+  for (let i=0;i<HN;i+=sH){
+    const a = pts[i];
+    gBlob.fill(255, OUTLINE_ALPHA);
+    gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
+  }
+  for (let i=HN;i<HN+MN;i+=sM){
+    const a = pts[i];
+    gBlob.fill(255, OUTLINE_ALPHA);
+    gBlob.circle(a.x/blobScale, a.y/blobScale, r*OUTLINE_SCALE*2);
+  }
+
+  // Guides (match v0.0.0 profile)
+  const gr = Math.max(2, Math.floor(r*0.5));
+  const GUIDE_STRIDE = 4, GUIDE_ALPHA = 8;
+  gBlob.fill(255, GUIDE_ALPHA);
+  for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){
+    const t = guides[gi];
+    gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2);
+  }
+
+  gBlob.pop(); // transform
+  gBlob.pop();
+
+  try { gBlob.filter(p.BLUR, blur); } catch(e){}
+  try { gBlob.filter(p.THRESHOLD, thr); } catch(e){ gBlob.filter(p.THRESHOLD); }
+  p.image(gBlob, 0, 0, p.width, p.height);
+}
+
       function drawSlime(){
         if (!gBlob) return;
+
+// ①-a / ②-a: use v0.0.0 render profile to eliminate outline stepping while snapping back.
+const __legacyTier3 = (phase === 'entrance' && ent.active && (ent.mode === '1a' || ent.mode === '2a'));
+if (__legacyTier3){
+  drawSlimeLegacyTier3();
+  return;
+}
 
         // 画面サイズの変化に応じて、描画パラメータを常に最新にする
         updateSlimeParams();
@@ -1058,7 +1117,6 @@
         gBlob.scale(__def.sx || 1, __def.sy || 1);
         gBlob.rotate(-(__def.angle || 0));
         gBlob.translate(-__cx, -__cy);
-
 
         const r = DISC_RADIUS;
         const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
@@ -1153,7 +1211,6 @@
         const nowMs = performance.now();
         const dtMs = Math.max(0, Math.min(120, nowMs - prevDrawMs));
         prevDrawMs = nowMs;
-
 
         // update detection
         if (cam.enabled && (p.frameCount % DETECT_EVERY_N_FRAMES === 0)) runDetection(nowMs);
