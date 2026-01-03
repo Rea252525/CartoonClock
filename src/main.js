@@ -22,26 +22,9 @@
     // Entrance feels a bit stronger so it "snaps" into place
     const ENTRANCE_SEEK_MULT = 1.18;
 
-    // Entrance ②-a（スクスト+遅れ）の“なめらか”用 低域フィルタ
+    // Entrance ①-a (スクアッシュ&ストレッチ) を“なめらか”にするためのm低域フィルタ
     // 0で無効（そのままのキレ）
-    const ENT2A_SMOOTH_TAU_MS = 70;
-
-    // ---- ①-a スクスト（粒子の移動で「伸びてる感」を作る） ----
-    // ここをいじると ①-a の「長さ / 激しさ / 伸び量」が変わります。
-    const ENT1A_GATHER_MS = 380;
-    const ENT1A_H_MS      = 520;
-    const ENT1A_V_MS      = 520;
-    const ENT1A_RECOIL_MS = 520;
-    const ENT1A_BOUNCE_MS = 520;
-
-    const ENT1A_STRETCH_RATIO      = 0.34; // 画面短辺に対する伸び量
-    const ENT1A_THICKNESS_RATIO    = 0.06; // 直交方向の厚み（大きいほど太い液体）
-    const ENT1A_CENTER_SHIFT_RATIO = 0.10; // 伸びる時の中心移動
-    const ENT1A_DIGIT_MIX_START    = 0.86; // recoil内で数字に寄り始める位置（大きいほど「最後に戻る」）
-
-    const ENT1A_SEEK_MULT    = 1.75; // ①-a中の吸引力倍率（大きいほど激しい）
-    const ENT1A_DAMP         = 0.84; // ①-a中の減衰（大きいほど跳ねる/残る）
-    const ENT1A_EXTRA_JITTER = 1.20; // ①-a中のランダム加速度（液体感）
+    const ENT1A_SMOOTH_TAU_MS = 70;
 
     // Face detection
     const DETECT_EVERY_N_FRAMES = 6;
@@ -50,7 +33,38 @@
     // Subtle life wobble when digits are shown
     const SEEN_WOBBLE = 8.32;     // px amplitude
     const WOBBLE_BASE_HZ = 0.10;  // Hz
-    const WOBBLE_JITTER_HZ = 16.24;
+        const WOBBLE_JITTER_HZ = 16.24;
+
+    // ---- Legacy (v0.0.0) "seen after 10s+" catch-up / overshoot (Tier3) ----
+    // These parameters are copied from v0.0.0 so ①-a / ②-a behave exactly the same.
+    const CATCHUP_MS = 320;
+    const CATCHUP_GAIN = 1.85;
+
+    // Time band borders (sec). We FORCE Tier3 for ①-a / ②-a, but we keep params as-is.
+    const EASING_TIER1_MAX_SEC = 4.9;
+    const EASING_TIER2_MAX_SEC = 9.9;
+
+    const TIER1_GAIN = 1.0;
+    const TIER2_GAIN = 1.0;
+    const TIER3_GAIN = 1.0;
+
+    const TIER1_EXPO_STEEPNESS = 10.0;
+    const TIER1_TIME_POWER = 1.0;
+
+    const TIER2_TIME_POWER = 1.0;
+    const TIER3_TIME_POWER = 1.0;
+
+    const TIER2_BACK_OVERSHOOT = 0.5;
+    const TIER3_BACK_OVERSHOOT = 1.0;
+
+    const TIER2_PEAK_FRAC = 0.7;
+    const TIER3_PEAK_FRAC = 0.4;
+
+    const TIER2_OUT_EXPO_STEEPNESS = 10.0;
+    const TIER3_OUT_EXPO_STEEPNESS = 40.0;
+
+    const TIER2_IN_EXPO_STEEPNESS = 10.0;
+    const TIER3_IN_EXPO_STEEPNESS = 40.0;
 
     // --- SLIME renderer params (guided) ---
     // NOTE:
@@ -126,22 +140,54 @@
       t = clamp01(t);
       return 1 - (1 - t) * (1 - t);
     }
+
+
+    // ---- Legacy (v0.0.0) param easings ----
+    function easeOutExpoParam(t, steep, timePower){
+      if (t <= 0) return 0;
+      if (t >= 1) return 1;
+      const u = Math.pow(t, timePower);
+      return 1 - Math.pow(2, -steep * u);
+    }
+
+    function easeInExpoParam(t, steep, timePower){
+      if (t <= 0) return 0;
+      if (t >= 1) return 1;
+      const u = Math.pow(t, timePower);
+      return Math.pow(2, steep * (u - 1));
+    }
+
+    // 0→peak→1.0, using OutExpo / InExpo with tunable peak timing.
+    function expoOvershootBlendParam(t, overshootAmount, peakFrac, timePower, outSteep, inSteep){
+      if (t <= 0) return 0;
+      if (t >= 1) return 1;
+
+      const tt = Math.pow(t, timePower);
+      const peak = 1 + overshootAmount;
+
+      if (tt <= peakFrac){
+        const u = tt / peakFrac;
+        const e = easeOutExpoParam(u, outSteep, 1.0);
+        return peak * e;
+      } else {
+        const u = (tt - peakFrac) / (1 - peakFrac);
+        const e = easeInExpoParam(u, inSteep, 1.0);
+        return peak + (1 - peak) * e;
+      }
+    }
 // ---------------- Entrance Specs ----------------
     const RECENT_SEEN_MS = 4000;
 
-    // ①-a timeline (ms) - 粒子の移動で「伸びる」→最後に数字に戻る
-    const ENT1A_TOTAL = ENT1A_GATHER_MS + ENT1A_H_MS + ENT1A_V_MS + ENT1A_RECOIL_MS + ENT1A_BOUNCE_MS;
-
-    // ②-a（スクスト+遅れ）のベース曲線（旧①-aのmタイムラインを流用）
-    const ENT2A_BASE_T1 = 100;
-    const ENT2A_BASE_T2 = 100;
-    const ENT2A_BASE_T3 = 800;
-    const ENT2A_BASE_TOTAL = ENT2A_BASE_T1 + ENT2A_BASE_T2 + ENT2A_BASE_T3;
+    // ①-a timeline (ms)
+    const ENT1A_T1 = 100;
+    const ENT1A_T2 = 100;
+    const ENT1A_T3 = 800;
+    const ENT1A_TOTAL = ENT1A_T1 + ENT1A_T2 + ENT1A_T3;
 
     // ②-a delayed subset
     const ENT2A_DELAY_MS = 500;
     const ENT2A_CATCH_MS = 700;
-    const ENT2A_TOTAL = Math.max(ENT2A_BASE_TOTAL, ENT2A_DELAY_MS + ENT2A_CATCH_MS);
+    const ENT2A_TOTAL = Math.max(ENT1A_TOTAL, ENT2A_DELAY_MS + ENT2A_CATCH_MS);
 
     // ②-b/c/d bounce timeline (seconds)
     const BOUNCE_DURS = [0.1,0.1,0.1, 0.2,0.2,0.2, 0.3,0.3,0.3, 0.3, 0.5]; // total ~2.6s
@@ -153,9 +199,6 @@
       let pts = new Array(N).fill(0).map(()=>({
         x:0,y:0,vx:0,vy:0,tx:0,ty:0,group:0,
         sx:0,sy:0, // entrance start positions
-        r0:(Math.random()*2-1),
-        r1:(Math.random()*2-1),
-        r2:(Math.random()*2-1),
       }));
 
       // Visual smoothing: avoid thickness jump on seen/unseen
@@ -187,9 +230,6 @@
         mode:'1a',
         startMs:0,
         durationMs:0,
-        // for ①-a
-        dirX:1,
-        dirY:1,
         // for ②-a
         subsetMask:null, // Uint8Array(N) with 0/1
         // for bounce
@@ -200,7 +240,7 @@
         vX:0, vY:0,
         mix01:0,
         impact01:0,
-        // m smoothing (for ②-a non-delayed part)
+        // m smoothing (for ①-a / ②-a non-delayed part)
         mFrame:0,
         _mSmooth:0,
         _mInit:false,
@@ -280,8 +320,8 @@
 
       // --- Test buttons ---
       function entranceDurationMsFor(mode){
-        if (mode === '1a') return ENT1A_TOTAL;
-        if (mode === '2a') return ENT2A_TOTAL;
+        if (mode === '1a') return CATCHUP_MS;
+        if (mode === '2a') return CATCHUP_MS;
         if (mode === '2b' || mode === '2c' || mode === '2d') return Math.floor(BOUNCE_TOTAL * 1000);
         return ENT1A_TOTAL;
       }
@@ -331,10 +371,6 @@
       let GUIDE_RADIUS = Math.floor(DISC_RADIUS_BASE * 0.75);
 
       let guides = [];
-
-      // group target centroids (0: H, 1: M, 2: :)
-      let gTX = new Float32Array(3);
-      let gTY = new Float32Array(3);
 
       function updateSlimeParams(){
         // 数字の見た目サイズ（レイアウトスケール×重なり回避スケール）
@@ -578,24 +614,6 @@
         assign(HN + MN, CN, txColon);
 
         guides = txH.concat(txM, txColon);
-
-        // group target centroids (used by ①-a)
-        {
-          let sx=0, sy=0;
-          for (let i=0;i<HN;i++){ sx += pts[i].tx; sy += pts[i].ty; }
-          gTX[0] = sx / Math.max(1, HN);
-          gTY[0] = sy / Math.max(1, HN);
-
-          sx=0; sy=0;
-          for (let i=HN;i<HN+MN;i++){ sx += pts[i].tx; sy += pts[i].ty; }
-          gTX[1] = sx / Math.max(1, MN);
-          gTY[1] = sy / Math.max(1, MN);
-
-          sx=0; sy=0;
-          for (let i=HN+MN;i<HN+MN+CN;i++){ sx += pts[i].tx; sy += pts[i].ty; }
-          gTX[2] = sx / Math.max(1, CN);
-          gTY[2] = sy / Math.max(1, CN);
-        }
         updateSlimeParams();
       }
 
@@ -718,11 +736,10 @@
 
         if (mode === '1a'){
           ent.durationMs = ENT1A_TOTAL;
-          ent.dirX = (Math.random() < 0.5) ? -1 : 1;
-          ent.dirY = (Math.random() < 0.5) ? -1 : 1;
-        } else if (mode === '2a'){
-          ent.durationMs = ENT2A_TOTAL;
-          ent.subsetMask = buildDelayedSubsetMask();
+        } else if (mode === '1a' || mode === '2a'){
+          // Legacy Tier3 catch-up (v0.0.0 "10秒以上")
+          ent.durationMs = CATCHUP_MS;
+          ent.mode = mode;
         } else if (mode === '2b' || mode === '2c' || mode === '2d'){
           ent.durationMs = Math.floor(BOUNCE_TOTAL*1000);
           ent.offx = new Float32Array(N);
@@ -735,10 +752,8 @@
             ent.offy[i] = Math.sin(a)*r;
           }
         } else {
-          ent.durationMs = ENT1A_TOTAL;
+          ent.durationMs = CATCHUP_MS;
           ent.mode = '1a';
-          ent.dirX = (Math.random() < 0.5) ? -1 : 1;
-          ent.dirY = (Math.random() < 0.5) ? -1 : 1;
         }
 
         phase = 'entrance';
@@ -783,29 +798,28 @@
       }
 
       // ---------------- Entrance motion helpers ----------------
-      // ②-a（スクスト+遅れ）のベース曲線（m: 0..-0.5..1.5..1.0）
-      function ent2aBaseProgress01(tMs){
+      function ent1aProgress01(tMs){
         // returns multiplier m (0..1.5..1) in "percent/100" (i.e., 1.0 means at target)
-        // Spec v0.2.5 (legacy):
+        // Spec v0.2.5:
         // 0→-50 : 0.1s (linear)
         // -50→150 : 0.1s (linear)
         // 150→100 : 0.8s (easeInExpo)
         if (tMs <= 0) return 0;
-        if (tMs >= ENT2A_BASE_TOTAL) return 1;
+        if (tMs >= ENT1A_TOTAL) return 1;
 
-        if (tMs < ENT2A_BASE_T1){
-          const u = clamp01(tMs / ENT2A_BASE_T1);
+        if (tMs < ENT1A_T1){
+          const u = clamp01(tMs / ENT1A_T1);
           // linear (時間が短いのでイージングなし)
           return 0 + (-0.5 - 0) * u;
         }
-        tMs -= ENT2A_BASE_T1;
-        if (tMs < ENT2A_BASE_T2){
-          const u = clamp01(tMs / ENT2A_BASE_T2);
+        tMs -= ENT1A_T1;
+        if (tMs < ENT1A_T2){
+          const u = clamp01(tMs / ENT1A_T2);
           // linear (時間が短いのでイージングなし)
           return -0.5 + (1.5 - (-0.5)) * u;
         }
-        tMs -= ENT2A_BASE_T2;
-        const u = clamp01(tMs / ENT2A_BASE_T3);
+        tMs -= ENT1A_T2;
+        const u = clamp01(tMs / ENT1A_T3);
         const e = easeInExpo(u);
         return 1.5 + (1.0 - 1.5) * e;
       }
@@ -930,159 +944,36 @@
       // Update per-frame entrance parameters (avoid per-particle state updates)
       function updateEntranceFrame(nowMs){
         if (!ent.active) return;
-        if (ent.mode !== '2a') return;
+        if (ent.mode !== '1a' && ent.mode !== '2a') return;
 
         const t = nowMs - ent.startMs;
-        // Ensure the base curve finishes exactly at ENT2A_BASE_TOTAL
-        if (t >= ENT2A_BASE_TOTAL){
-          ent._mInit = true;
-          ent._mSmooth = 1;
+        const dur = Math.max(1, ent.durationMs || CATCHUP_MS);
+
+        // Legacy Tier3 (v0.0.0 "10秒以上") progress. No smoothing/filtering.
+        if (t >= dur){
           ent.mFrame = 1;
-          ent._mLastMs = nowMs;
           return;
         }
-        const raw = ent2aBaseProgress01(t);
-
-        if (!(ENT2A_SMOOTH_TAU_MS > 0)){
-          ent.mFrame = raw;
-          return;
-        }
-
-        const last = ent._mLastMs || nowMs;
-        const dt = Math.min(50, Math.max(0, nowMs - last));
-        ent._mLastMs = nowMs;
-
-        if (!ent._mInit){
-          ent._mInit = true;
-          ent._mSmooth = raw;
-          ent.mFrame = raw;
-          return;
-        }
-
-        const k = 1 - Math.exp(-dt / ENT2A_SMOOTH_TAU_MS);
-        ent._mSmooth = ent._mSmooth + (raw - ent._mSmooth) * k;
-        ent.mFrame = ent._mSmooth;
+        const tn = clamp01(t / dur);
+        ent.mFrame = expoOvershootBlendParam(
+          tn,
+          TIER3_BACK_OVERSHOOT,
+          TIER3_PEAK_FRAC,
+          TIER3_TIME_POWER,
+          TIER3_OUT_EXPO_STEEPNESS,
+          TIER3_IN_EXPO_STEEPNESS
+        );
       }
 
 
       function computeEntranceDesired(i, nowMs){
         const t = nowMs - ent.startMs;
 
-        if (ent.mode === '1a'){
+        if (ent.mode === '1a' || ent.mode === '2a'){
+          // Legacy Tier3 catch-up (v0.0.0 "10秒以上")
+          const m = (typeof ent.mFrame === 'number') ? ent.mFrame : 0;
           const a = pts[i];
-          const g = a.group; // 0:H, 1:M, 2::
-          const gcx = gTX[g] || (p.width*0.5);
-          const gcy = gTY[g] || (p.height*0.5);
-
-          // local index 0..1 within group
-          let start = 0, count = HN;
-          if (g === 1){ start = HN; count = MN; }
-          if (g === 2){ start = HN + MN; count = CN; }
-          const u01 = ((i - start) + 0.5) / Math.max(1, count); // 0..1
-          const band = u01 - 0.5; // -0.5..0.5
-
-          const minDim = Math.min(p.width, p.height);
-          const stretch = minDim * ENT1A_STRETCH_RATIO;
-          const thick   = minDim * ENT1A_THICKNESS_RATIO;
-          const shift   = minDim * ENT1A_CENTER_SHIFT_RATIO;
-
-          // timeline
-          const t0 = ENT1A_GATHER_MS;
-          const t1 = t0 + ENT1A_H_MS;
-          const t2 = t1 + ENT1A_V_MS;
-          const t3 = t2 + ENT1A_RECOIL_MS;
-
-          // small organic wobble while still "液体"
-          const tt = nowMs * 0.001;
-          const wob = (1 - clamp01(t / Math.max(1, ENT1A_TOTAL))) * 1.0;
-          const jx = Math.sin(tt*5.4 + a.r2*6.0) * thick * 0.22 * wob;
-          const jy = Math.cos(tt*4.7 + a.r0*5.0) * thick * 0.22 * wob;
-
-          // gather -> horizontal wrong stretch -> vertical stretch -> recoil -> bounce (digits)
-          if (t < t0){
-            const u = clamp01(t / t0);
-            const e = easeOutExpo(u);
-            const cx = gcx;
-            const cy = gcy;
-            // gather to group center (stay liquid)
-            const tx = cx + a.r0 * thick * 1.2;
-            const ty = cy + a.r1 * thick * 1.2;
-            return {x: a.sx + (tx - a.sx) * e + jx, y: a.sy + (ty - a.sy) * e + jy};
-          }
-
-          if (t < t1){
-            const u = clamp01((t - t0) / Math.max(1, ENT1A_H_MS));
-            const e = easeInOutQuad(u);
-            // one-sided horizontal smear
-            const cx = gcx - ent.dirX * shift * 0.55 * e;
-            const cy = gcy;
-            const ox = ent.dirX * (u01) * stretch * (0.85 + 0.15*e) + a.r0 * thick * 0.6;
-            const oy = (band*2.0 + a.r1*0.55) * thick;
-            return {x: cx + ox + jx, y: cy + oy + jy};
-          }
-
-          if (t < t2){
-            const u = clamp01((t - t1) / Math.max(1, ENT1A_V_MS));
-            const e = easeInOutQuad(u);
-            // one-sided vertical smear
-            const cx = gcx;
-            const cy = gcy - ent.dirY * shift * 0.55 * e;
-            const ox = (band*2.0 + a.r0*0.55) * thick;
-            const oy = ent.dirY * (u01) * stretch * (0.85 + 0.15*e) + a.r1 * thick * 0.6;
-            return {x: cx + ox + jx, y: cy + oy + jy};
-          }
-
-          if (t < t3){
-            // recoil: keep liquid, then only at the end blend to digits
-            const u = clamp01((t - t2) / Math.max(1, ENT1A_RECOIL_MS));
-            const e = easeInOutQuad(u);
-            const shrink = 1.0 - e;
-
-            // collapse the smear back near the group center
-            const cx = gcx;
-            const cy = gcy;
-            const ox = (band*2.0 + a.r0*0.65) * thick * (0.9 + 0.3*shrink);
-            const oy = ent.dirY * (u01) * stretch * shrink + a.r1 * thick * 0.35 * shrink;
-            const liquidX = cx + ox + jx;
-            const liquidY = cy + oy + jy;
-
-            let mix = 0;
-            if (u >= ENT1A_DIGIT_MIX_START){
-              mix = (u - ENT1A_DIGIT_MIX_START) / Math.max(1e-6, (1.0 - ENT1A_DIGIT_MIX_START));
-              mix = easeOutExpo(clamp01(mix));
-            }
-
-            return {
-              x: liquidX + (a.tx - liquidX) * mix,
-              y: liquidY + (a.ty - liquidY) * mix
-            };
-          }
-
-          // bounce on arrival (digits)
-          {
-            const u = clamp01((t - t3) / Math.max(1, ENT1A_BOUNCE_MS));
-            const decay = Math.pow(1 - u, 2.2);
-            const amp = minDim * 0.018 * decay;
-            const osc = Math.sin(u * Math.PI * 2 * 2.6);
-            const bx = (a.r0*0.65 + band*0.8) * amp * osc;
-            const by = (a.r1*0.65 - band*0.6) * amp * osc;
-            return {x: a.tx + bx, y: a.ty + by};
-          }
-        }
-
-        if (ent.mode === '2a'){
-          const a = pts[i];
-          if (ent.subsetMask && ent.subsetMask[i]){
-            if (t < ENT2A_DELAY_MS){
-              return {x:a.sx, y:a.sy};
-            }
-            const u = (t - ENT2A_DELAY_MS) / ENT2A_CATCH_MS;
-            const e = easeOutCirc(u);
-            return {x: a.sx + (a.tx - a.sx) * e, y: a.sy + (a.ty - a.sy) * e};
-          } else {
-            const m = (typeof ent.mFrame === 'number') ? ent.mFrame : ent2aBaseProgress01(t);
-            return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
-          }
+          return {x: a.sx + (a.tx - a.sx) * m, y: a.sy + (a.ty - a.sy) * m};
         }
 
         // bounce family
@@ -1110,11 +1001,44 @@
           y: by + (a.ty - by) * mix
         };
       }
-
-      // ---------------- Rendering deformation ----------------
-      // v0.2.6: 伸び表現は「粒子の移動」で作る（バッファ全体のスケール変形は行わない）
+// ---------------- Rendering deformation ----------------
+      // When bouncing: droplet while moving / squashed at impact
       function computeDeform(){
-        return {angle:0, sx:1, sy:1};
+        // default: identity
+        let angle = 0, sx = 1, sy = 1;
+
+        if (phase !== 'entrance') return {angle,sx,sy};
+
+        if (ent.mode === '2b' || ent.mode === '2c' || ent.mode === '2d'){
+          const vx = ent.vX, vy = ent.vY;
+          const speed = Math.sqrt(vx*vx + vy*vy);
+          if (speed > 1e-3){
+            angle = Math.atan2(vy, vx);
+            const s = Math.min(1, speed / 1600); // normalize
+            const moveStretch = 1 + 0.42*s;
+            const moveSquash  = 1 - 0.28*s;
+
+            const imp = ent.impact01 || 0;
+            // impact: squash in moving direction, stretch perpendicular
+            const along = (1-imp)*moveStretch + imp*moveSquash;
+            const perp  = (1-imp)*moveSquash  + imp*moveStretch;
+
+            sx = along;
+            sy = perp;
+          }
+        } else {
+          // 1a / 2a: slight squash near overshoot (m>1)
+          const nowMs = performance.now();
+          const t = nowMs - ent.startMs;
+          const m = ent.mode==='1a' ? ent1aProgress01(t) : ent1aProgress01(t);
+          const overs = Math.max(0, Math.min(1, (m - 1.0) / 0.5));
+          if (overs > 0){
+            angle = 0;
+            sx = 1 + 0.20*overs;
+            sy = 1 - 0.14*overs;
+          }
+        }
+        return {angle,sx,sy};
       }
 
       function drawSlime(){
@@ -1128,6 +1052,18 @@
         gBlob.background(0);
         gBlob.blendMode(gBlob.ADD);
         gBlob.noStroke();
+        // __DEFORM_APPLIED__
+        const __def = (typeof computeDeform === 'function') ? computeDeform() : {angle:0,sx:1,sy:1};
+        const __cx = (p.width || DESIGN_W) * 0.5;
+        const __cy = (p.height || DESIGN_H) * 0.5370370; // digits baseline center (design-aligned)
+        gBlob.push();
+        gBlob.translate(__cx, __cy);
+        gBlob.rotate(__def.angle || 0);
+        gBlob.scale(__def.sx || 1, __def.sy || 1);
+        gBlob.rotate(-(__def.angle || 0));
+        gBlob.translate(-__cx, -__cy);
+
+
         const r = DISC_RADIUS;
         const BASE_ALPHA = (BASE_ALPHA_SEEN * seenVis01) + (BASE_ALPHA_UNSEEN * (1.0 - seenVis01));
         // Colon second-tick (":")
@@ -1209,6 +1145,7 @@
         for (let gi=0; gi<guides.length; gi+=GUIDE_STRIDE){ const t=guides[gi]; gBlob.circle(t.x/blobScale, t.y/blobScale, gr*2); }
 
         gBlob.pop();
+        gBlob.pop(); // __DEFORM_APPLIED__ end
 
         try { gBlob.filter(p.BLUR, BLUR_AMOUNT); } catch(e){}
         try { gBlob.filter(p.THRESHOLD, THRESH_LEVEL); } catch(e){ gBlob.filter(p.THRESHOLD); }
@@ -1302,11 +1239,17 @@
               targetY = d.y;
             }
 
-            // wobble only when mostly in display (or near end of entrance)
+            // wobble
             let wobbleGain = 1.0;
             if (phase === 'entrance' && ent.active){
-              const tt = clamp01((nowMs - ent.startMs) / Math.max(1, ent.durationMs));
-              wobbleGain = Math.max(0, (tt - 0.65) / 0.35);
+              // Legacy Tier3 (v0.0.0) had wobble on from the start.
+              if (ent.mode === '1a' || ent.mode === '2a'){
+                wobbleGain = 1.0;
+              } else {
+                // other entrances: fade in wobble near the end
+                const tt = clamp01((nowMs - ent.startMs) / Math.max(1, ent.durationMs));
+                wobbleGain = Math.max(0, (tt - 0.65) / 0.35);
+              }
             }
 
 	            const baseHz = WOBBLE_BASE_HZ;
@@ -1326,21 +1269,11 @@
             const dy = (targetY + wobbleY) - a.y;
 
             let mult = (phase === 'entrance') ? ENTRANCE_SEEK_MULT : 1.0;
-            let damp = DAMP;
-
-            // ①-a は「液体感」を強める（数字に戻るのは最後）
-            if (phase === 'entrance' && ent.active && ent.mode === '1a'){
-              mult *= ENT1A_SEEK_MULT;
-              damp = ENT1A_DAMP;
-              const tt = clamp01((nowMs - ent.startMs) / Math.max(1, ent.durationMs));
-              const pre = clamp01((0.92 - tt) / 0.92); // 0.92以降は収束優先
-              const jit = ENT1A_EXTRA_JITTER * pre;
-              a.vx += (Math.random()-0.5) * jit;
-              a.vy += (Math.random()-0.5) * jit;
+            if (phase === 'entrance' && ent.active && (ent.mode === '1a' || ent.mode === '2a')){
+              mult = CATCHUP_GAIN * TIER3_GAIN; // legacy catch-up gain
             }
-
-            a.vx = (a.vx + dx * SEEK_STRENGTH * mult) * damp;
-            a.vy = (a.vy + dy * SEEK_STRENGTH * mult) * damp;
+            a.vx = (a.vx + dx * SEEK_STRENGTH * mult) * DAMP;
+            a.vy = (a.vy + dy * SEEK_STRENGTH * mult) * DAMP;
           }
 
           a.x += a.vx;
