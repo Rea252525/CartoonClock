@@ -210,13 +210,14 @@ function easeOutExpoParam(t, steep, timePower){
     let sketch = (p)=>{
       // --------------- State ---------------
       let pts = new Array(N).fill(0).map(()=>({x:0,y:0,vx:0,vy:0,tx:0,ty:0, group:0, activeAt:0, ax:0, ay:0, catchUntil:0, sx:0, sy:0, catchStart:0, catchTier:0}));
-      let seen = true, prevSeen = true, lastTimeStr = "";
+      // 初回は「見られていない」状態から開始（展示/一般向け）
+      let seen = false, prevSeen = false, lastTimeStr = "";
       let frames=0, lastFPS=0, lastFPSTime=performance.now();
       let unseenStart = null;  // 見られていない状態が始まった時刻
 
       // 見失い時のソフト遷移（0..1の係数で「見られている影響」を残しつつIDLEへ）
       let softLost = null;     // { start:number, dur:number }
-      let seenFactor = 1.0;    // 1=見られている, 0=見られていない（ソフト遷移中は中間）
+      let seenFactor = 0.0;    // 1=見られている, 0=見られていない（ソフト遷移中は中間）
 
 // Phase (4フェーズ)
 let phase = 'IDLE';       // 'IDLE' | 'ENTER' | 'SHOW' | 'EXIT'
@@ -415,11 +416,12 @@ function _resetApproachTracker(){
 
       // UI
       const holder = document.getElementById('canvas-holder');
-      const fakeSeen = document.getElementById('fakeSeen');
+      // UI (v0.2.0): 一般向けに最小UI
+      const fakeSeen = document.getElementById('fakeSeen');     // 旧デバッグ用（存在しなくてもOK）
       const btnCam = document.getElementById('btnCam');
-      const btnSim = document.getElementById('btnSim');
-      const togglePreview = document.getElementById('togglePreview');
-      const diag = document.getElementById('diag');
+      const btnPreview = document.getElementById('btnPreview'); // 新: ボタンでトグル
+      const togglePreview = document.getElementById('togglePreview'); // 旧: チェックボックス（存在しなくてもOK）
+      const diag = document.getElementById('diag');             // 旧: 診断表示（存在しなくてもOK）
 
       // Fullscreen & UI visibility (for exhibition)
       const uiBox = document.getElementById('ui');
@@ -624,21 +626,37 @@ if (phaseLabel) phaseLabel.textContent = 'Phase: ' + phase;
 if (enterLabel) enterLabel.textContent = 'Enter: ' + enterName;
 
 
-      if (fakeSeen){ fakeSeen.addEventListener('change', ()=>{ seen = fakeSeen.checked; }); seen = fakeSeen.checked; }
-      if (btnSim){
-        btnSim.addEventListener('click', ()=>{
-          cam.enabled = false;
-          if (cam.wrap) cam.wrap.style.display = 'none';
-          seen = true; if (fakeSeen) fakeSeen.checked = true;
-          updateDiag('診断: シミュレーション ON');
-        });
+      // 旧デバッグUIが残っている場合だけ拾う（公開版では基本的にDOMに存在しない）
+      if (fakeSeen){
+        fakeSeen.addEventListener('change', ()=>{ seen = !!fakeSeen.checked; });
       }
-      if (togglePreview){
-        togglePreview.addEventListener('change', ()=>{
-          cam.preview = togglePreview.checked;
+
+      function applyPreviewState(on){
+        cam.preview = !!on;
+        if (cam.wrap){
           cam.wrap.style.display = (cam.preview && cam.enabled) ? 'block' : 'none';
-        });
+        }
+        if (togglePreview){
+          togglePreview.checked = !!cam.preview;
+        }
+        if (btnPreview){
+          btnPreview.textContent = cam.preview ? 'カメラプレビューを非表示' : 'カメラプレビューを表示';
+          btnPreview.classList.toggle('primary', cam.preview);
+        }
       }
+
+      // 新UI: ボタンでプレビューをトグル
+      if (btnPreview){
+        btnPreview.addEventListener('click', ()=> applyPreviewState(!cam.preview));
+      }
+
+      // 旧UI: チェックボックスがある場合は連動
+      if (togglePreview){
+        togglePreview.addEventListener('change', ()=> applyPreviewState(!!togglePreview.checked));
+      }
+
+      // 初期はプレビューOFF（一般向け）
+      applyPreviewState(false);
       if (btnCam){ btnCam.addEventListener('click', startCamera); }
       function updateDiag(text){ if (diag) diag.textContent = text; }
 
@@ -1597,7 +1615,11 @@ function sampleEnterBounceTarget(a, nowMs){
         try{
           const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user', width:{ideal:480}, height:{ideal:360}, frameRate:{ideal:30, max:30}}, audio:false});
           cam.stream=stream; cam.video.srcObject=stream; await cam.video.play();
-          cam.enabled=true; cam.wrap.style.display=(cam.preview || (togglePreview && togglePreview.checked))?'block':'none';
+          cam.enabled=true;
+          // プレビュー表示はユーザー操作に従う（デフォルトOFF）
+          try{ applyPreviewState(!!cam.preview); }catch(_e){
+            if (cam.wrap) cam.wrap.style.display = (cam.preview ? 'block' : 'none');
+          }
 
           cam.api='MediaPipe';
           cam.detector=null;
@@ -1617,14 +1639,10 @@ function sampleEnterBounceTarget(a, nowMs){
             cam.api = 'none';
           }
 
-          // After camera starts: switch to real detection + show preview by default
+          // fakeSeen / 旧デバッグUIが存在する場合だけオフにしておく（通常はDOMに無い）
           if (fakeSeen){
             fakeSeen.checked = false;
             try{ fakeSeen.dispatchEvent(new Event('change')); }catch(_e){}
-          }
-          if (togglePreview){
-            togglePreview.checked = true;
-            try{ togglePreview.dispatchEvent(new Event('change')); }catch(_e){}
           }
         }catch(e){ console.error(e); updateDiag('診断: カメラ不可（権限/環境）'); }
       }

@@ -4,237 +4,218 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none';">
-  <title>共有用_サボる時計 v0.1.0 (GitHub Pages)</title>
+  <title>共有用_サボる時計 v0.2.0</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%0A%3Crect%20x%3D%272%27%20y%3D%272%27%20width%3D%2728%27%20height%3D%2728%27%20rx%3D%276%27%20fill%3D%27black%27%20stroke%3D%27white%27%20stroke-width%3D%272%27%2F%3E%0A%3Cpath%20d%3D%27M6%2016%20h20%20M16%206%20v20%27%20stroke%3D%27white%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%2F%3E%0A%3C%2Fsvg%3E">
+
 <style>
-    html, body { height:100%; margin:0; background:#000; color:#eee; }
-    #canvas-holder { position: fixed; inset: 0; background: #000; overflow: hidden; }
-    #ui {
-      position:fixed; left:10px; top:10px; z-index:99999;
-      background:rgba(20,20,20,0.86); color:#eaeaea; border:1px solid rgba(255,255,255,0.2);
-      border-radius:10px; padding:10px 14px; backdrop-filter:blur(4px);
-      box-shadow:0 6px 20px rgba(0,0,0,0.4);
-      font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-      min-width: 280px;
-    }
-    #ui .row { margin:6px 0; }
-    #ui .note { font-size:12px; color:#a8e6a1; }
-  
+  html, body { height:100%; margin:0; background:#000; color:#eee; }
+  html, body { width:100%; overflow:hidden; overscroll-behavior:none; }
+  #canvas-holder { position:fixed; inset:0; background:#000; overflow:hidden; width:100vw; height:100dvh; touch-action:none; }
+  @supports (height: 100dvh){ #canvas-holder { height:100dvh; } }
 
-    /* --- Camera preview (debug) --- */
-    #camWrap{
-      position:fixed;
-      right:10px;
-      bottom:10px;
-      width:280px;
-      z-index:99998;
-      background:rgba(0,0,0,0.40);
-      border:1px solid rgba(255,255,255,0.18);
-      border-radius:10px;
-      padding:6px;
-      display:none;
-    }
-    #camInner{ position:relative; width:100%; }
-    #cam{ width:100%; height:auto; display:block; transform:scaleX(-1); }
-    #faceBox{
-      position:absolute;
-      left:0; top:0;
-      width:0; height:0;
-      border:2px solid rgba(0,255,0,0.9);
-      border-radius:6px;
-      box-sizing:border-box;
-      pointer-events:none;
-      display:none;
-    }
+  /* --- Local Inter fonts (offline) --- */
+  @font-face {
+    font-family: 'InterLocal';
+    src: url('./fonts/Inter-Regular.otf') format('opentype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'InterLocal';
+    src: url('./fonts/Inter-Bold.otf') format('opentype');
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+  }
+  #font-warmup {
+    position: fixed;
+    left: -9999px;
+    top: -9999px;
+    font-family: 'InterLocal', sans-serif;
+    font-weight: 700;
+    font-size: 32px;
+    line-height: 1;
+    opacity: 0;
+    pointer-events: none;
+  }
 
-/* --- Local Inter fonts (offline) --- */
-@font-face {
-  font-family: 'InterLocal';
-  src: url('./fonts/Inter-Regular.otf') format('opentype');
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: 'InterLocal';
-  src: url('./fonts/Inter-Bold.otf') format('opentype');
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-/* Trigger font download so document.fonts.ready waits for it */
-#font-warmup {
-  position: fixed;
-  left: -9999px;
-  top: -9999px;
-  font-family: 'InterLocal', sans-serif;
-  font-weight: 700;
-  font-size: 32px;
-  line-height: 1;
-  opacity: 0;
-  pointer-events: none;
-}
+  /* --- UI --- */
+  :root{
+    --ui-bg: rgba(20,20,20,0.86);
+    --ui-bd: rgba(255,255,255,0.20);
+    --ui-tx: #f2f2f2;
+    --ui-sub: rgba(255,255,255,0.75);
+    --btn-bg: rgba(255,255,255,0.10);
+    --btn-bg-h: rgba(255,255,255,0.14);
+    --btn-bd: rgba(255,255,255,0.22);
+    --btn-bd-h: rgba(255,255,255,0.28);
+    --btn-primary-bg: rgba(56,128,255,0.28);
+    --btn-primary-bd: rgba(56,128,255,0.48);
+  }
 
+  #ui {
+    position:fixed;
+    left:12px;
+    top:12px;
+    z-index:99999;
+    background:var(--ui-bg);
+    color:var(--ui-tx);
+    border:1px solid var(--ui-bd);
+    border-radius:14px;
+    padding:12px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+    font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    min-width: 270px;
+    max-width: 320px;
+  }
 
-    /* --- Viewport / iPad toolbar friendly --- */
-    html, body { width:100%; overflow:hidden; overscroll-behavior: none; }
-    #canvas-holder { width:100vw; height:100dvh; touch-action:none; }
-    @supports (height: 100dvh){
-      #canvas-holder { height:100dvh; }
-    }
-    /* Floating UI toggle (shown when UI hidden) */
-    #uiFab{
-      position:fixed; right:12px; top:12px; z-index:99998;
-      width:44px; height:44px; border-radius:12px;
-      border:1px solid rgba(255,255,255,0.25);
-      background:rgba(20,20,20,0.70); color:#fff;
-      font:20px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-      display:none;
-      backdrop-filter: blur(4px);
-      box-shadow:0 6px 20px rgba(0,0,0,0.35);
-    }
-    /* Fullscreen help overlay */
-    #fsHelp{
-      position:fixed; inset:0; z-index:99997;
-      background:rgba(0,0,0,0.82);
-      color:#fff;
-      display:none;
-      padding:24px 18px;
-      font:16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-    }
-    #fsHelp .panel{
-      max-width:720px;
-      margin:0 auto;
-      background:rgba(20,20,20,0.86);
-      border:1px solid rgba(255,255,255,0.18);
-      border-radius:14px;
-      padding:16px 16px;
-      box-shadow:0 10px 30px rgba(0,0,0,0.45);
-    }
-    #fsHelp .panel h2{ margin:0 0 8px 0; font-size:18px; }
-    #fsHelp .panel ol{ margin:8px 0 0 20px; }
-    #fsHelp .panel .small{ font-size:13px; opacity:0.9; }
-    #fsHelpClose{
-      margin-top:12px;
-      padding:10px 12px;
-      border-radius:10px;
-      border:1px solid rgba(255,255,255,0.25);
-      background:rgba(255,255,255,0.08);
-      color:#fff;
-      font:14px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-    }
+  #uiHeader{
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    gap:10px;
+    margin-bottom:10px;
+  }
 
+  .ui-btn, .ui-icon-btn{
+    -webkit-appearance:none;
+    appearance:none;
+    border:1px solid var(--btn-bd);
+    background:var(--btn-bg);
+    color:#fff;
+    border-radius:12px;
+    padding:11px 12px;
+    font: 14px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    cursor:pointer;
+    user-select:none;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.28);
+  }
+  .ui-btn:hover, .ui-icon-btn:hover{ background:var(--btn-bg-h); border-color:var(--btn-bd-h); }
+  .ui-btn:active, .ui-icon-btn:active{ transform: translateY(1px); }
+  .ui-btn.primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-bd); }
+  .ui-btn.primary:hover{ background:rgba(56,128,255,0.34); border-color:rgba(56,128,255,0.60); }
+
+  #uiActions{ display:flex; flex-direction:column; gap:10px; }
+
+  #btnHideUI{
+    width:44px;
+    height:44px;
+    padding:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:18px;
+  }
+
+  /* Settings FAB (shown when UI collapsed) */
+  #uiFab{
+    position:fixed;
+    right:12px;
+    top:12px;
+    z-index:99998;
+    width:44px;
+    height:44px;
+    padding:0;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    font-size:18px;
+    border-radius:14px;
+  }
+
+  /* --- Fullscreen help overlay --- */
+  #fsHelp{
+    position:fixed;
+    inset:0;
+    z-index:99997;
+    background:rgba(0,0,0,0.82);
+    color:#fff;
+    display:none;
+    padding:24px 18px;
+    font:16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  }
+  #fsHelp .panel{
+    max-width:720px;
+    margin:0 auto;
+    background:rgba(20,20,20,0.86);
+    border:1px solid rgba(255,255,255,0.18);
+    border-radius:14px;
+    padding:16px 16px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.45);
+  }
+  #fsHelp .panel h2{ margin:0 0 8px 0; font-size:18px; }
+  #fsHelp .panel ol{ margin:8px 0 0 20px; }
+  #fsHelp .panel .small{ font-size:13px; opacity:0.9; }
+  #fsHelpClose{ margin-top:12px; }
+
+  /* --- Camera preview (optional) --- */
+  #camWrap{
+    position:fixed;
+    right:10px;
+    bottom:10px;
+    width:280px;
+    z-index:99996;
+    background:rgba(0,0,0,0.40);
+    border:1px solid rgba(255,255,255,0.18);
+    border-radius:14px;
+    padding:6px;
+    display:none;
+  }
+  #camInner{ position:relative; width:100%; }
+  #cam{ width:100%; height:auto; display:block; transform:scaleX(-1); border-radius:10px; }
+  #faceBox{
+    position:absolute;
+    left:0; top:0;
+    width:0; height:0;
+    border:2px solid rgba(0,255,0,0.9);
+    border-radius:6px;
+    box-sizing:border-box;
+    pointer-events:none;
+    display:none;
+  }
 </style>
 </head>
+
 <body>
   <span id="font-warmup">0123456789:</span>
-  <div id="ui">
-    <div class="note">build v0.1.0 (GitHub Pages公開用：HTTPSでカメラ可 / 依存は同梱)</div>
-    <div class="note" id="diag">診断: OK</div>
 
-    <div class="row" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <button id="btnFS">⛶ フルスクリーン</button>
-      <button id="btnHideUI">UIを隠す</button>
-      <span style="font-size:12px;color:#a8e6a1;">（iPad Chromeは「ホーム画面に追加」でツールバーが消えます）</span>
+  <div id="ui" role="dialog" aria-label="設定">
+    <div id="uiHeader">
+      <button id="btnHideUI" class="ui-icon-btn" aria-label="閉じる">→</button>
     </div>
 
-    <div class="row">
-      <button id="btnCam">① カメラを許可して開始</button>
-      <button id="btnSim">（最初はこれ）視線をシミュレーション開始</button>
+    <div id="uiActions">
+      <button id="btnFS" class="ui-btn">⛶ フルスクリーン</button>
+      <button id="btnCam" class="ui-btn primary">📷 カメラを許可して開始</button>
+      <button id="btnPreview" class="ui-btn">カメラプレビューを表示</button>
     </div>
-    <div class="row">
-      <label><input type="checkbox" id="fakeSeen" checked> 見られている（シミュレーション）</label>
-    	  <span id="notSeenTimer" style="margin-left:8px;font-size:12px;color:#a8e6a1;">見られていない時間: 0.0s</span>
-    </div>
-    <div class="row">
-      <label><input type="checkbox" id="togglePreview"> カメラプレビューを表示（デバッグ用）</label>
-    </div>
-    <div class="row">
-      <span id="phaseLabel" style="font-size:12px;color:#ffd;">Phase: -</span>
-      <span id="enterLabel" style="margin-left:10px;font-size:12px;color:#ffd;">Enter: -</span>
-      <span id="exitLabel" style="margin-left:10px;font-size:12px;color:#ffd;">Exit: -</span>
-    </div>
-
-    <div class="row" style="flex-wrap:wrap;gap:6px;">
-      <button id="btnEnter1a">①-a スクスト</button>
-      <button id="btnEnter2a">②-a スクスト+一部遅れ</button>
-      <button id="btnEnter2b">②-b 多方向ランダム</button>
-    </div>
-
-    <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px;">
-      <button id="btnExit1a">①-a 後ずさり</button>
-      <button id="btnExit2a">②-a 赤→爆発</button>
-      <button id="btnExit2b">②-b 透明→消滅</button>
-    </div>
-
-    <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;">
-      <span style="font-size:12px;color:#ddd;">顔シミュレーション:</span>
-      <label style="font-size:12px;color:#ddd;">X</label>
-      <input type="range" id="simFaceX" min="0" max="1" step="0.01" value="0.5" style="width:120px;">
-      <span id="simFaceXVal" style="font-size:12px;color:#ddd;">0.50</span>
-
-      <label style="font-size:12px;color:#ddd;">Y</label>
-      <input type="range" id="simFaceY" min="0" max="1" step="0.01" value="0.5" style="width:120px;">
-      <span id="simFaceYVal" style="font-size:12px;color:#ddd;">0.50</span>
-
-      <label style="font-size:12px;color:#ddd;">大きさ</label>
-      <input type="range" id="simFaceSize" min="0.05" max="1.50" step="0.01" value="0.22" style="width:140px;">
-      <span id="simFaceSizeVal" style="font-size:12px;color:#ddd;">0.22</span>
-    </div>
-
-    <div class="row" style="align-items:center; gap:8px; margin-top:6px;">
-      <label style="font-size:12px;color:#ddd;">②-a遅れ</label>
-
-      <label style="font-size:12px;color:#ddd;">delay</label>
-      <input type="range" id="enter2aDelay" min="0" max="2500" step="10" value="1200" style="width:160px;" disabled>
-      <span id="enter2aDelayVal" style="font-size:12px;color:#ddd;">1200ms</span>
-
-      <label style="font-size:12px;color:#ddd;">量</label>
-      <input type="range" id="enter2aRatio" min="0.05" max="1.00" step="0.01" value="1.00" style="width:140px;" disabled>
-      <span id="enter2aRatioVal" style="font-size:12px;color:#ddd;">1.00</span>
-
-      <label style="font-size:12px;color:#ddd;">クラスター</label>
-      <input type="checkbox" id="enter2aCluster" checked disabled>
-    </div>
-
-    </div>
-
-    </div>
-
-    <div class="row" style="align-items:center;">
-      <label style="font-size:12px;color:#ddd;">自動テスト用 未検知秒:</label>
-      <input type="range" id="simUnseenSec" min="0" max="12" step="0.5" value="2" style="width:120px;">
-      <span id="simUnseenVal" style="font-size:12px;color:#ddd;">2.0s</span>
-      <button id="btnAutoEnter">未検知→検知（4秒ルール）</button>
-    </div>
-
   </div>
 
-
-  <button id="uiFab" aria-label="UIを表示">≡</button>
+  <button id="uiFab" class="ui-icon-btn" aria-label="設定">⚙</button>
 
   <div id="fsHelp">
     <div class="panel">
       <h2>フルスクリーンにする</h2>
-      <p>iPadのChrome/Safariは、ページから完全にツールバーを消せない場合があります。<br>一番確実なのは <b>「ホーム画面に追加」</b> で起動する方法です。</p>
+      <p>ブラウザによってはページからフルスクリーンができない場合があります。<br>
+      その場合は、端末の機能（ホーム画面に追加 など）で全画面表示にしてください。</p>
       <ol>
         <li>共有ボタン（□↑）を押す</li>
         <li><b>「ホーム画面に追加」</b> を選ぶ</li>
-        <li>追加したアイコンから起動する（ツールバー無し）</li>
+        <li>追加したアイコンから起動する</li>
       </ol>
-      <p class="small">※この作品は localhost で開いているので、起動中はローカルWebサーバ（Textastic等）を開いたままにしてください。</p>
-      <button id="fsHelpClose">閉じる</button>
+      <p class="small">※カメラは HTTPS またはローカルサーバ（localhost）で開いてください。</p>
+      <button id="fsHelpClose" class="ui-btn">閉じる</button>
     </div>
   </div>
 
-  <!-- Camera preview (debug). Frame lines removed, face-box added. -->
+  <!-- Camera preview (optional) -->
   <div id="camWrap">
     <div id="camInner">
       <video id="cam" autoplay playsinline muted></video>
-      <!-- Face tracking box (shown only when a face is detected) -->
       <div id="faceBox"></div>
     </div>
-  </div>
   </div>
 
   <div id="canvas-holder"></div>
