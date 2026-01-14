@@ -40,12 +40,11 @@
     const CN = 110;          // colon ":" allocation
     const N  = HN + MN + CN; // total
     const IDLE_JITTER = 0.35, SEEK_STRENGTH = 0.085, DAMP = 0.78;
-    const DETECT_MIN_INTERVAL_MS = PERF_MODE ? 160 : 110, SEEN_DEBOUNCE_MS = 180;
-    const LOST_CONFIRM_STREAK = 2; // 連続「未検知」回数で見失い確定（検出の瞬断を吸収）
+    const DETECT_MIN_INTERVAL_MS = PERF_MODE ? 160 : 110, SEEN_DEBOUNCE_MS = 1200;
 
     // 見失い時の「パキッ」を防ぐためのスムーズ切替（ms）
     // ②-a / ②-b の最中・後でも、未検知になった瞬間からじわっとサボり(IDLE)へ。
-    const LOST_TO_IDLE_MS = 220;
+    const LOST_TO_IDLE_MS = 750;
 
     // ---- Linger-head gag ----
     const LAG_FRACTION_MIN = 0.15, LAG_FRACTION_MAX = 0.25;
@@ -70,9 +69,9 @@ const EXIT1A_TRIGGER_RATIO = 1.12;
 // v0.5.2: EXIT①-a（後ずさり）は「急速に近づいた」時だけ発火させる（1mm増で暴発しない）
 // 近づき判定: 短時間で面積が増えた + ただの移動（中心だけ動く）と区別
 const EXIT1A_APPROACH_WINDOW_MS = 100;       // 何msの変化を見るか
-const EXIT1A_APPROACH_RATIO = 1.07;          // 最低でもこれだけ面積比が増えたら「近づき」候補
-const EXIT1A_APPROACH_MIN_DSIZE = 0.008;     // 面積(正規化)の絶対増加量（ノイズ除去）
-const EXIT1A_APPROACH_MIN_RATE = 0.040;      // 1秒あたりの増加量（急速さ）
+const EXIT1A_APPROACH_RATIO = 1.05;          // 最低でもこれだけ面積比が増えたら「近づき」候補
+const EXIT1A_APPROACH_MIN_DSIZE = 0.010;     // 面積(正規化)の絶対増加量（ノイズ除去）
+const EXIT1A_APPROACH_MIN_RATE = 0.050;      // 1秒あたりの増加量（急速さ）
 const EXIT1A_APPROACH_MOVE_THRESH = 0.08;    // ただの移動（中心移動）が大きい時の判定
 const EXIT1A_APPROACH_MOVE_EXTRA_RATIO = 0.02; // 大きく移動した場合は、さらに面積増加を要求
 const EXIT1A_APPROACH_COOLDOWN_MS = 1200;    // 連続暴発を防ぐクールダウン
@@ -255,7 +254,7 @@ function _resetApproachTracker(){
                     inner: document.getElementById('camInner'),
                     previewMirror:true,
                     faceBox: document.getElementById('faceBox'),
-                    stream:null, detector:null, api:'none', lastSeenAt: 0, lastDetectAt: 0, noFaceStreak: 0,
+                    stream:null, detector:null, api:'none', lastSeenAt: 0, lastDetectAt: 0,
                     face:{has:false,cx:0.5,cy:0.5,size:0.22,w:0,h:0}, faceAt:0 };
 
       function hideFaceBox(){
@@ -1604,7 +1603,6 @@ function sampleEnterBounceTarget(a, nowMs){
           cam.face = {has:false,cx:0.5,cy:0.5,size:0.22,w:0,h:0};
           cam.faceAt = 0;
           cam.lastSeenAt = 0;
-          cam.noFaceStreak = 0;
 
           // Hide face box until a face is detected
           if (cam.faceBox) cam.faceBox.style.display = 'none';
@@ -1719,7 +1717,6 @@ function sampleEnterBounceTarget(a, nowMs){
             const { res, vw, vh } = detectOnPreviewCanvas(now);
             const faces = (res && Array.isArray(res.detections)) ? res.detections : [];
             if (faces.length>0){
-              cam.noFaceStreak = 0;
               cam.lastSeenAt = now;
 
               // pick largest face
@@ -1747,8 +1744,7 @@ function sampleEnterBounceTarget(a, nowMs){
                 // Update preview overlay (green square)
                 updateFaceBoxFromBB(bb, vw, vh);
               } else {
-                cam.noFaceStreak = (cam.noFaceStreak||0) + 1;
-              cam.face.has = false;
+                cam.face.has = false;
                 if (cam.faceBox) cam.faceBox.style.display = 'none';
                 cam._faceBoxSmooth = null;
               }
@@ -1760,13 +1756,11 @@ function sampleEnterBounceTarget(a, nowMs){
           }catch(_e){
 	            // If MediaPipe throws (often due to runningMode mismatch or source type), log it.
 	            console.error('[FaceDetect]', _e);
-            cam.noFaceStreak = (cam.noFaceStreak||0) + 1;
             cam.face.has = false;
             if (cam.faceBox) cam.faceBox.style.display = 'none';
                 cam._faceBoxSmooth = null;
           }
         } else {
-          cam.noFaceStreak = (cam.noFaceStreak||0) + 1;
           cam.face.has = false;
           if (cam.faceBox) cam.faceBox.style.display = 'none';
                 cam._faceBoxSmooth = null;
@@ -1829,52 +1823,20 @@ function _updateApproachTracker(now){
 }
 
 function _shouldTriggerExit1aRapidApproach(now){
-  // "急速に近づいた" 判定（誤爆対策強化）
   if (_lastApproachAt > 0 && (now - _lastApproachAt) < EXIT1A_APPROACH_COOLDOWN_MS) return false;
-  if (_approachBuf.length < 5) return false; // 100ms窓で最低限のサンプルが欲しい（60fps想定）
+  if (_approachBuf.length < 2) return false;
+  const first = _approachBuf[0];
+  const last = _approachBuf[_approachBuf.length - 1];
 
-  const n = _approachBuf.length;
-  const k = Math.max(2, Math.min(6, Math.floor(n * 0.2))); // 先頭/末尾を2〜6点で平均
+  const dt = Math.max(0.001, (last.t - first.t) / 1000);
+  const ratio = last.size / Math.max(0.000001, first.size);
+  const dSize = last.size - first.size;
+  const rate = dSize / dt;
 
-  // 平均（先頭k点 / 末尾k点）
-  let fS=0, fX=0, fY=0, lS=0, lX=0, lY=0;
-  for (let i=0;i<k;i++){
-    const a=_approachBuf[i];
-    const b=_approachBuf[n-1-i];
-    fS += a.size; fX += a.cx; fY += a.cy;
-    lS += b.size; lX += b.cx; lY += b.cy;
-  }
-  const firstSize = fS / k;
-  const lastSize  = lS / k;
-  const firstCx = fX / k, firstCy = fY / k;
-  const lastCx  = lX / k, lastCy  = lY / k;
-
-  const firstT = _approachBuf[0].t;
-  const lastT  = _approachBuf[n-1].t;
-  const dt = Math.max(0.001, (lastT - firstT) / 1000);
-
-  const ratio = lastSize / Math.max(0.000001, firstSize);
-  const dSize = lastSize - firstSize;
-  const rate  = dSize / dt;
-
-  const move = _distN(firstCx, firstCy, lastCx, lastCy);
+  const move = _distN(first.cx, first.cy, last.cx, last.cy);
   const movedALot = move > EXIT1A_APPROACH_MOVE_THRESH;
 
-  // 増加が「優勢」か（小さな上下ノイズを弾く）
-  const EPS = 0.0006;
-  let pos=0, neg=0;
-  for (let i=1;i<n;i++){
-    const ds = _approachBuf[i].size - _approachBuf[i-1].size;
-    if (ds > EPS) pos++;
-    else if (ds < -EPS) neg++;
-  }
-  const strong = pos + neg;
-  const dominance = strong > 0 ? (pos / strong) : 0;
-  const domOK = (strong >= 2) && (dominance >= 0.65);
-
-  const approachBasic = (ratio >= EXIT1A_APPROACH_RATIO) &&
-                        (dSize >= EXIT1A_APPROACH_MIN_DSIZE || rate >= EXIT1A_APPROACH_MIN_RATE) &&
-                        domOK;
+  const approachBasic = (ratio >= EXIT1A_APPROACH_RATIO) && (dSize >= EXIT1A_APPROACH_MIN_DSIZE || rate >= EXIT1A_APPROACH_MIN_RATE);
   if (!approachBasic) return false;
 
   // 大きく移動しただけ（中心だけ動く）っぽいケースは、さらに面積増加を要求
@@ -2274,7 +2236,7 @@ function drawSlime(){
         if (now-lastFPSTime>=500){ lastFPS=Math.round(frames*1000/(now-lastFPSTime)); frames=0; lastFPSTime=now; }
 
         if (cam.enabled) runDetection(now);
-        const camSeen = cam.enabled ? ((now-cam.lastSeenAt<=SEEN_DEBOUNCE_MS) && ((cam.noFaceStreak||0) < LOST_CONFIRM_STREAK)) : false;
+        const camSeen = cam.enabled ? (now-cam.lastSeenAt<=SEEN_DEBOUNCE_MS) : false;
         const effectiveSeen = cam.enabled ? camSeen : seen;
         seen = effectiveSeen;
 

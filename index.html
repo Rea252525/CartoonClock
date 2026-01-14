@@ -2,96 +2,245 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>サボる時計 v0.2.4</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none';">
+  <title>共有用_サボる時計 v0.1.0 (GitHub Pages)</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%0A%3Crect%20x%3D%272%27%20y%3D%272%27%20width%3D%2728%27%20height%3D%2728%27%20rx%3D%276%27%20fill%3D%27black%27%20stroke%3D%27white%27%20stroke-width%3D%272%27%2F%3E%0A%3Cpath%20d%3D%27M6%2016%20h20%20M16%206%20v20%27%20stroke%3D%27white%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%2F%3E%0A%3C%2Fsvg%3E">
-
-  <!-- Google Fonts: Noto Sans 100 -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@100&display=swap" rel="stylesheet">
-  <link rel='preconnect' href='https://fonts.googleapis.com'>
-<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
-<link href='https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap' rel='stylesheet'>
 <style>
     html, body { height:100%; margin:0; background:#000; color:#eee; }
     #canvas-holder { position: fixed; inset: 0; background: #000; overflow: hidden; }
-
-    /* 右上の小さな設定ボタン（背景透過の丸ボタン） */
-    #btnSettings {
-      position:fixed; right:10px; top:10px; z-index:99999;
-      width:40px; height:40px;
-      border-radius:50%;
-      border:none;
-      background:transparent;
-      color:#eee;
-      cursor:pointer;
-      font-size:18px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding:0;
+    #ui {
+      position:fixed; left:10px; top:10px; z-index:99999;
+      background:rgba(20,20,20,0.86); color:#eaeaea; border:1px solid rgba(255,255,255,0.2);
+      border-radius:10px; padding:10px 14px; backdrop-filter:blur(4px);
+      box-shadow:0 6px 20px rgba(0,0,0,0.4);
+      font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      min-width: 280px;
     }
+    #ui .row { margin:6px 0; }
+    #ui .note { font-size:12px; color:#a8e6a1; }
+  
 
-    /* 設定パネル（通常は非表示） */
-    #settings-panel {
-      position:fixed; right:10px; top:60px; z-index:99998;
-      background:rgba(255,255,255,0.5); color:#000;
-      border:none;
-      border-radius:10px; padding:10px 14px;
-      box-shadow:0 6px 20px rgba(0,0,0,0.25);
-      font:13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-      min-width:220px;
+    /* --- Camera preview (debug) --- */
+    #camWrap{
+      position:fixed;
+      right:10px;
+      bottom:10px;
+      width:280px;
+      z-index:99998;
+      background:rgba(0,0,0,0.40);
+      border:1px solid rgba(255,255,255,0.18);
+      border-radius:10px;
+      padding:6px;
       display:none;
     }
-    #settings-panel .row { margin:6px 0; }
-  </style>
+    #camInner{ position:relative; width:100%; }
+    #cam{ width:100%; height:auto; display:block; transform:scaleX(-1); }
+    #faceBox{
+      position:absolute;
+      left:0; top:0;
+      width:0; height:0;
+      border:2px solid rgba(0,255,0,0.9);
+      border-radius:6px;
+      box-sizing:border-box;
+      pointer-events:none;
+      display:none;
+    }
+
+/* --- Local Inter fonts (offline) --- */
+@font-face {
+  font-family: 'InterLocal';
+  src: url('./fonts/Inter-Regular.otf') format('opentype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'InterLocal';
+  src: url('./fonts/Inter-Bold.otf') format('opentype');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+/* Trigger font download so document.fonts.ready waits for it */
+#font-warmup {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  font-family: 'InterLocal', sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+
+    /* --- Viewport / iPad toolbar friendly --- */
+    html, body { width:100%; overflow:hidden; overscroll-behavior: none; }
+    #canvas-holder { width:100vw; height:100dvh; touch-action:none; }
+    @supports (height: 100dvh){
+      #canvas-holder { height:100dvh; }
+    }
+    /* Floating UI toggle (shown when UI hidden) */
+    #uiFab{
+      position:fixed; right:12px; top:12px; z-index:99998;
+      width:44px; height:44px; border-radius:12px;
+      border:1px solid rgba(255,255,255,0.25);
+      background:rgba(20,20,20,0.70); color:#fff;
+      font:20px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      display:none;
+      backdrop-filter: blur(4px);
+      box-shadow:0 6px 20px rgba(0,0,0,0.35);
+    }
+    /* Fullscreen help overlay */
+    #fsHelp{
+      position:fixed; inset:0; z-index:99997;
+      background:rgba(0,0,0,0.82);
+      color:#fff;
+      display:none;
+      padding:24px 18px;
+      font:16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    #fsHelp .panel{
+      max-width:720px;
+      margin:0 auto;
+      background:rgba(20,20,20,0.86);
+      border:1px solid rgba(255,255,255,0.18);
+      border-radius:14px;
+      padding:16px 16px;
+      box-shadow:0 10px 30px rgba(0,0,0,0.45);
+    }
+    #fsHelp .panel h2{ margin:0 0 8px 0; font-size:18px; }
+    #fsHelp .panel ol{ margin:8px 0 0 20px; }
+    #fsHelp .panel .small{ font-size:13px; opacity:0.9; }
+    #fsHelpClose{
+      margin-top:12px;
+      padding:10px 12px;
+      border-radius:10px;
+      border:1px solid rgba(255,255,255,0.25);
+      background:rgba(255,255,255,0.08);
+      color:#fff;
+      font:14px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+
+</style>
 </head>
 <body>
-  <button id="btnSettings" aria-label="設定" title="設定">⚙︎</button>
-  <div id="settings-panel">
+  <span id="font-warmup">0123456789:</span>
+  <div id="ui">
+    <div class="note">build v0.1.0 (GitHub Pages公開用：HTTPSでカメラ可 / 依存は同梱)</div>
+    <div class="note" id="diag">診断: OK</div>
+
+    <div class="row" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button id="btnFS">⛶ フルスクリーン</button>
+      <button id="btnHideUI">UIを隠す</button>
+      <span style="font-size:12px;color:#a8e6a1;">（iPad Chromeは「ホーム画面に追加」でツールバーが消えます）</span>
+    </div>
+
     <div class="row">
-      <button id="btnCam">カメラを許可して開始</button>
-      <button id="btnSim">視線をシミュレーション</button>
+      <button id="btnCam">① カメラを許可して開始</button>
+      <button id="btnSim">（最初はこれ）視線をシミュレーション開始</button>
     </div>
     <div class="row">
       <label><input type="checkbox" id="fakeSeen" checked> 見られている（シミュレーション）</label>
+    	  <span id="notSeenTimer" style="margin-left:8px;font-size:12px;color:#a8e6a1;">見られていない時間: 0.0s</span>
     </div>
     <div class="row">
-      <label><input type="checkbox" id="togglePreview"> カメラプレビューを表示</label>
+      <label><input type="checkbox" id="togglePreview"> カメラプレビューを表示（デバッグ用）</label>
+    </div>
+    <div class="row">
+      <span id="phaseLabel" style="font-size:12px;color:#ffd;">Phase: -</span>
+      <span id="enterLabel" style="margin-left:10px;font-size:12px;color:#ffd;">Enter: -</span>
+      <span id="exitLabel" style="margin-left:10px;font-size:12px;color:#ffd;">Exit: -</span>
     </div>
 
-    <div class="row" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.15);">
-      <div style="font-weight:600;margin-bottom:6px;">登場アニメ テスト</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;">
-        <button id="btnEnt1a">①-a スクスト</button>
-        <button id="btnEnt2a">②-a スクスト（v0.0.0同様）</button>
-        <button id="btnEnt2b">②-b 上下バウンド</button>
-        <button id="btnEnt2c">②-c 左右バウンド</button>
-        <button id="btnEnt2d">②-d 多方向バウンド</button>
-        <button id="btnEntAuto">AUTO（4秒ルール）</button>
-        <button id="btnToSlack">サボりに戻す</button>
-      </div>
-      <div style="margin-top:6px;opacity:0.85;font-size:12px;">
-        ※「見られている（シミュレーション）」がOFFでも、ボタンを押すと数秒だけ“見られた扱い”になって再生します。
-      </div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;">
+      <button id="btnEnter1a">①-a スクスト</button>
+      <button id="btnEnter2a">②-a スクスト+一部遅れ</button>
+      <button id="btnEnter2b">②-b 多方向ランダム</button>
+    </div>
+
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:6px;">
+      <button id="btnExit1a">①-a 後ずさり</button>
+      <button id="btnExit2a">②-a 赤→爆発</button>
+      <button id="btnExit2b">②-b 透明→消滅</button>
+    </div>
+
+    <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:#ddd;">顔シミュレーション:</span>
+      <label style="font-size:12px;color:#ddd;">X</label>
+      <input type="range" id="simFaceX" min="0" max="1" step="0.01" value="0.5" style="width:120px;">
+      <span id="simFaceXVal" style="font-size:12px;color:#ddd;">0.50</span>
+
+      <label style="font-size:12px;color:#ddd;">Y</label>
+      <input type="range" id="simFaceY" min="0" max="1" step="0.01" value="0.5" style="width:120px;">
+      <span id="simFaceYVal" style="font-size:12px;color:#ddd;">0.50</span>
+
+      <label style="font-size:12px;color:#ddd;">大きさ</label>
+      <input type="range" id="simFaceSize" min="0.05" max="1.50" step="0.01" value="0.22" style="width:140px;">
+      <span id="simFaceSizeVal" style="font-size:12px;color:#ddd;">0.22</span>
+    </div>
+
+    <div class="row" style="align-items:center; gap:8px; margin-top:6px;">
+      <label style="font-size:12px;color:#ddd;">②-a遅れ</label>
+
+      <label style="font-size:12px;color:#ddd;">delay</label>
+      <input type="range" id="enter2aDelay" min="0" max="2500" step="10" value="1200" style="width:160px;" disabled>
+      <span id="enter2aDelayVal" style="font-size:12px;color:#ddd;">1200ms</span>
+
+      <label style="font-size:12px;color:#ddd;">量</label>
+      <input type="range" id="enter2aRatio" min="0.05" max="1.00" step="0.01" value="1.00" style="width:140px;" disabled>
+      <span id="enter2aRatioVal" style="font-size:12px;color:#ddd;">1.00</span>
+
+      <label style="font-size:12px;color:#ddd;">クラスター</label>
+      <input type="checkbox" id="enter2aCluster" checked disabled>
+    </div>
+
+    </div>
+
+    </div>
+
+    <div class="row" style="align-items:center;">
+      <label style="font-size:12px;color:#ddd;">自動テスト用 未検知秒:</label>
+      <input type="range" id="simUnseenSec" min="0" max="12" step="0.5" value="2" style="width:120px;">
+      <span id="simUnseenVal" style="font-size:12px;color:#ddd;">2.0s</span>
+      <button id="btnAutoEnter">未検知→検知（4秒ルール）</button>
+    </div>
+
+  </div>
+
+
+  <button id="uiFab" aria-label="UIを表示">≡</button>
+
+  <div id="fsHelp">
+    <div class="panel">
+      <h2>フルスクリーンにする</h2>
+      <p>iPadのChrome/Safariは、ページから完全にツールバーを消せない場合があります。<br>一番確実なのは <b>「ホーム画面に追加」</b> で起動する方法です。</p>
+      <ol>
+        <li>共有ボタン（□↑）を押す</li>
+        <li><b>「ホーム画面に追加」</b> を選ぶ</li>
+        <li>追加したアイコンから起動する（ツールバー無し）</li>
+      </ol>
+      <p class="small">※この作品は localhost で開いているので、起動中はローカルWebサーバ（Textastic等）を開いたままにしてください。</p>
+      <button id="fsHelpClose">閉じる</button>
     </div>
   </div>
 
-  <div id="camWrap" style="position:fixed;right:10px;bottom:10px;width:240px;z-index:50000;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.3);border-radius:10px;padding:6px;display:none;">
-    <video id="cam" autoplay playsinline muted style="width:100%;height:auto;transform:scaleX(-1);display:block;"></video>
-    <div class="overlay" style="position:absolute;inset:6px;pointer-events:none;border:1px dashed rgba(0,255,0,0.7);border-radius:8px;"></div>
+  <!-- Camera preview (debug). Frame lines removed, face-box added. -->
+  <div id="camWrap">
+    <div id="camInner">
+      <video id="cam" autoplay playsinline muted></video>
+      <!-- Face tracking box (shown only when a face is detected) -->
+      <div id="faceBox"></div>
+    </div>
+  </div>
   </div>
 
+  <div id="canvas-holder"></div>
 
-  
-      
-
-  
-<div id="canvas-holder"></div>
-
-  <!-- p5 CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
-  <script src="./src/main.js?v=0.2.4" defer></script>
+  <!-- p5 (bundled for offline use) -->
+  <script src="./libs/p5.min.js"></script>
+  <script src="./src/main.js" defer></script>
 </body>
 </html>
