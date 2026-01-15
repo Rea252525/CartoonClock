@@ -430,6 +430,7 @@ function _resetApproachTracker(){
       const uiFab = document.getElementById('uiFab');
       const fsHelp = document.getElementById('fsHelp');
       const fsHelpClose = document.getElementById('fsHelpClose');
+      const fsHelpX = document.getElementById('fsHelpX');
 
       function setUIVisible(v){
         if (!uiBox) return;
@@ -462,6 +463,7 @@ function _resetApproachTracker(){
       if (uiFab){ uiFab.addEventListener('click', ()=> setUIVisible(true)); }
       if (btnFS){ btnFS.addEventListener('click', ()=>{ requestFullscreenSmart(); }); }
       if (fsHelpClose){ fsHelpClose.addEventListener('click', ()=> showFsHelp(false)); }
+      if (fsHelpX){ fsHelpX.addEventListener('click', ()=> showFsHelp(false)); }
       if (fsHelp){ fsHelp.addEventListener('click', (e)=>{ if (e.target === fsHelp) showFsHelp(false); }); }
 
 
